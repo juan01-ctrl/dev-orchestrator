@@ -1,0 +1,13 @@
+{
+  "name": "dev-orchestrator-connector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "check": "tsc --noEmit",
+    "start": "node --experimental-strip-types src/cli.ts"
+  },
+  "devDependencies": { "@types/node": "22.18.8", "typescript": "5.9.3" }
+}
