@@ -1,0 +1,41 @@
+name: Verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  platform:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5433:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: platform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28'
+          elixir-version: '1.19.5'
+      - run: mix deps.get
+      - run: mix assets.copy
+      - run: mix format --check-formatted
+      - run: mix test
+  connector:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: connector
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test

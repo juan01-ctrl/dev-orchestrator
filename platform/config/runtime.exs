@@ -48,12 +48,14 @@ end
 
 config :dev_orchestrator, :mail_from, System.get_env("MAIL_FROM", "orchestrator@localhost")
 
-for {provider, prefix} <- [{:slack, "SLACK"}, {:linear, "LINEAR"}, {:github, "GITHUB"}] do
-  config :dev_orchestrator, provider,
-    client_id: System.get_env(prefix <> "_CLIENT_ID"),
-    client_secret: System.get_env(prefix <> "_CLIENT_SECRET"),
-    webhook_secret: System.get_env(prefix <> "_WEBHOOK_SECRET"),
-    app_id: System.get_env(prefix <> "_APP_ID"),
-    private_key_path: System.get_env(prefix <> "_PRIVATE_KEY_PATH"),
-    app_slug: System.get_env(prefix <> "_APP_SLUG")
+unless config_env() == :test do
+  for {provider, prefix} <- [{:slack, "SLACK"}, {:linear, "LINEAR"}, {:github, "GITHUB"}] do
+    config :dev_orchestrator, provider,
+      client_id: System.get_env(prefix <> "_CLIENT_ID"),
+      client_secret: System.get_env(prefix <> "_CLIENT_SECRET"),
+      webhook_secret: System.get_env(prefix <> "_WEBHOOK_SECRET"),
+      app_id: System.get_env(prefix <> "_APP_ID"),
+      private_key_path: System.get_env(prefix <> "_PRIVATE_KEY_PATH"),
+      app_slug: System.get_env(prefix <> "_APP_SLUG")
+  end
 end
