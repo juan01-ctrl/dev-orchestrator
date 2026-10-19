@@ -1,0 +1,19 @@
+name: dev-orchestrator-evaluation
+services:
+  database:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dev_orchestrator_dev
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - evaluation_database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d dev_orchestrator_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  evaluation_database:

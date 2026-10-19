@@ -6,6 +6,8 @@
 **/cover/
 **/.DS_Store
 /.runtime/
+**/connector.json
+/operator-secrets/
 .env
 .env.*
 !.env.example

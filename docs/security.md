@@ -1,0 +1,48 @@
+# Evaluation security boundaries
+
+The cloud source is private; the customer connector is inspectable software, not
+a cryptographic secret. Do not promise that distributed binaries or prompts cannot
+be reverse engineered. Commercial provider permissions are separate from local
+technical feasibility.
+
+## Enforced design
+
+- Browser sessions are signed/encrypted cookies containing a random session token;
+  the database stores only its hash. Email verification precedes authenticated
+  project access. Resetting passwords invalidates active session tokens.
+- Server-side scope derives organization membership from the authenticated user.
+  Project-scoped queries and compound tenant foreign keys restrict data access.
+- Provider secrets use AES-256-GCM with organization-specific authenticated data.
+  OAuth state is single-use, expiring, bound to user, project and browser session.
+- Enrollment codes expire after ten minutes, are single use and are rate-limited.
+  Executor credentials are hashed on the server and stored owner-only on the host.
+- Connector calls are outbound HTTPS, with no redirects or inbound remote shell.
+  Loopback HTTP is allowed for development only.
+- Local source, repository and task-root authorization is separate from cloud
+  project binding. Agents work in isolated checkouts, not the source checkout.
+- Codex receives an environment allowlist and a project-write permission profile;
+  Git metadata is writable but global provider configuration is not. The sandbox
+  must be enforced by a supported local Codex build. Agent network access is off.
+- Trusted Git publication operates through a temporary bare repository, ignores
+  the task's Git config/hooks and forbids force pushes/merges. The cloud verifies
+  repository/head/base/commit before accepting a PR result.
+- Durable fencing and sequence checks reject stale or duplicate run events.
+  Executor revocation/cancellation takes effect on the next lease check; it does
+  not magically undo an already-started external operation.
+
+## Limits requiring review before public rollout
+
+The full integration suite, live browser flow and actual provider delivery remain
+required deployment gates. Database-level RLS, security audit, invitation flows,
+encryption-key rotation, enterprise SSO and hosted customer execution are not
+implemented. Organization membership is supported, but public team invitation and
+organization-switching UI are intentionally deferred.
+
+The connector currently runs one task at a time. It preserves a PID lock after
+an unclean stop; only remove that exact lock after confirming no executor process
+is still using the credential. Do not copy a paired configuration across machines.
+Use distinct executor enrollments for distinct machines.
+
+The model provider receives task context, including source. Sanitized control-plane
+metadata can also contain repository names and issue titles. No blanket claim of
+"all code stays on your machine" is made. Do not enter secrets into task instructions.

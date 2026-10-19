@@ -1,0 +1,6 @@
+deps
+_build
+.env*
+test
+*.pem
+*.key

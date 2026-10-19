@@ -148,5 +148,6 @@ Recommended execution is native: one agent implements these dependent interfaces
 in this session, with per-task verification and review before publication. No
 subagents, cloud deployment or provider-account registration are requested.
 
-Next: user reviews this plan and confirms native execution, then implementation
-begins with Task 1. Do not push documentation alone as a completed product.
+Native execution was approved. See `docs/implementation-status.md` for the source
+checkpoint, verification evidence and remaining gates. Do not mark unchecked tasks
+complete or publish this as a completed product based on source-only verification.

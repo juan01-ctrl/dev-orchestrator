@@ -1,0 +1,37 @@
+# Evaluation acceptance checklist
+
+This is a checklist to execute, not a claim that these checks have already passed.
+
+## Before connecting real tools
+
+- Run connector tests and TypeScript checking with the committed package lock.
+- Resolve/commit the platform lockfile, run migrations and the complete `mix test`.
+- Register two accounts, verify email, and prove neither can open the other's IDs.
+- Exercise login, logout, password reset and the authenticated LiveView routes.
+- Check the UI at 320px, 768px, 1024px and 1440px, including keyboard navigation.
+- Check pairing-code expiry/replay, executor revocation and local root restrictions.
+- Interrupt networking mid-task; confirm preserved files and reconciliation without
+  an automatically duplicated task or PR.
+
+## Authorized provider smoke test
+
+Use a dedicated test repository and Slack channel. Do not use a production task
+or the old Symphony checkout. Register and configure the operator's provider apps,
+connect them from a project, invite the Slack bot, and authorize a local executor.
+
+1. Queue a task to create `prueba.txt` containing `esto es una prueba`.
+2. Confirm execution occurs in an isolated checkout, on `task/<run-id>`.
+3. Confirm the branch is committed/pushed without interactive approval or force push.
+4. Confirm the open PR targets the configured base and its head matches the commit.
+5. Confirm the web run is successful and the Slack report includes that verified URL.
+6. Confirm the Linear issue enters the configured review state only after verification.
+7. Replay the webhook and final event: neither should create a second run/report.
+8. Trigger three equivalent controlled errors; confirm cancellation and one report,
+   preserved work, and no automatic fourth attempt after server restart.
+9. Disconnect the executor and revoke a connection; verify truthful actionable states.
+
+## Publication
+
+Do not publish as a completed product until the deployment gates above pass.
+The user's authorized destination is `juan01-ctrl/dev-orchestrator` on `main`.
+Check remote history first, never force-push, and verify the remote commit after push.

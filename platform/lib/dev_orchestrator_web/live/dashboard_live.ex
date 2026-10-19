@@ -1,0 +1,489 @@
+defmodule DevOrchestratorWeb.DashboardLive do
+  use Phoenix.LiveView, layout: false
+  alias DevOrchestrator.{Accounts, Projects, Connections, Executors, Runs}
+  import DevOrchestratorWeb.DashboardComponents
+
+  def mount(_, session, socket) do
+    if connected?(socket), do: Process.send_after(self(), :refresh, 5_000)
+
+    {:ok,
+     assign(socket,
+       session_token: session["session_token"],
+       code: nil,
+       selected: nil,
+       selected_run: nil
+     )}
+  end
+
+  def handle_params(params, _, socket),
+    do: {:noreply, socket |> assign(:params, params) |> refresh()}
+
+  def handle_info(:refresh, socket) do
+    Process.send_after(self(), :refresh, 5_000)
+    {:noreply, refresh(socket)}
+  end
+
+  def handle_event(event, params, socket) do
+    case Accounts.from_session(socket.assigns.session_token) do
+      {:ok, scope} -> dispatch(event, params, assign(socket, :scope, scope))
+      _ -> {:noreply, redirect(socket, to: "/login")}
+    end
+  end
+
+  defp dispatch("create_project", params, socket) do
+    case Projects.create_project(socket.assigns.scope, params) do
+      {:ok, project} ->
+        {:noreply, push_navigate(socket, to: "/app/projects/" <> project.id)}
+
+      _ ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Check the project name, owner/repository, branch and concurrency."
+         )}
+    end
+  end
+
+  defp dispatch("save_project", params, socket) do
+    case Projects.update_project(socket.assigns.scope, socket.assigns.params["id"], params) do
+      {:ok, _} ->
+        {:noreply,
+         socket |> put_flash(:info, "Project rules saved for future attempts.") |> refresh()}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Project rules were not saved. Check the fields.")}
+    end
+  end
+
+  defp dispatch("create_run", params, socket) do
+    case Runs.create(socket.assigns.scope, params["project_id"], params) do
+      {:ok, run} ->
+        {:noreply, push_navigate(socket, to: "/app/runs/" <> run["id"])}
+
+      _ ->
+        {:noreply,
+         put_flash(socket, :error, "Choose a project and enter a title and task instructions.")}
+    end
+  end
+
+  defp dispatch("pair", _, socket) do
+    case Executors.create_enrollment(socket.assigns.scope) do
+      {:ok, code} ->
+        {:noreply, assign(socket, :code, code)}
+
+      _ ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Only owners can enroll executors. Try again later if the limit was reached."
+         )}
+    end
+  end
+
+  defp dispatch("bind", params, socket) do
+    case Executors.bind(socket.assigns.scope, params["executor_id"], params["project_id"]) do
+      :ok ->
+        {:noreply,
+         socket |> put_flash(:info, "Executor authorized for this project.") |> refresh()}
+
+      _ ->
+        {:noreply,
+         put_flash(socket, :error, "Binding denied. Check ownership and project access.")}
+    end
+  end
+
+  defp dispatch("revoke", %{"id" => id}, socket),
+    do: action(socket, Executors.revoke(socket.assigns.scope, id), "Executor access revoked.")
+
+  defp dispatch("disconnect", %{"id" => id}, socket),
+    do:
+      action(
+        socket,
+        Connections.disconnect(socket.assigns.scope, id),
+        "Connection disabled for future requests."
+      )
+
+  defp dispatch("retry", %{"id" => id}, socket),
+    do: action(socket, Runs.retry(socket.assigns.scope, id), "New execution lifecycle queued.")
+
+  defp dispatch("cancel", %{"id" => id}, socket),
+    do:
+      action(
+        socket,
+        Runs.cancel(socket.assigns.scope, id),
+        "Cancellation recorded. The executor stops on lease renewal."
+      )
+
+  defp dispatch(_, _, socket), do: {:noreply, socket}
+
+  defp action(socket, result, message) do
+    if result == :ok or match?({:ok, _}, result),
+      do: {:noreply, socket |> put_flash(:info, message) |> refresh()},
+      else:
+        {:noreply,
+         put_flash(socket, :error, "The action is not available for this state or account.")}
+  end
+
+  defp refresh(socket) do
+    case Accounts.from_session(socket.assigns.session_token) do
+      {:ok, scope} ->
+        selected =
+          if socket.assigns.live_action == :project do
+            case Projects.get_project(scope, socket.assigns.params["id"]) do
+              {:ok, p} -> p
+              _ -> nil
+            end
+          end
+
+        run =
+          if socket.assigns.live_action == :run do
+            case Runs.get(scope, socket.assigns.params["id"]) do
+              {:ok, r} -> r
+              _ -> nil
+            end
+          end
+
+        assign(socket,
+          scope: scope,
+          projects: Projects.list(scope),
+          connections: Connections.list(scope),
+          executors: Executors.list(scope),
+          bindings: Executors.bindings(scope),
+          runs: Runs.list(scope),
+          selected: selected,
+          selected_run: run,
+          deliveries:
+            if(run, do: DevOrchestrator.Delivery.Outbox.list(scope, run["id"]), else: []),
+          events: if(run, do: Runs.events(scope, run["id"]), else: [])
+        )
+
+      _ ->
+        redirect(socket, to: "/login")
+    end
+  end
+
+  def render(assigns) do
+    ~H"""
+    <div class="workspace">
+      <aside class="sidebar">
+        <a class="brand" href="/app">⌘ <span>dev / orchestrator</span></a>
+        <p class="workspace-label">Your workspace</p>
+        <nav aria-label="Main navigation">
+          <.link navigate="/app" aria-current={if @live_action in [:projects, :project], do: "page"}>
+            Projects <span>{length(@projects)}</span>
+          </.link>
+          <.link navigate="/app/runs" aria-current={if @live_action in [:runs, :run], do: "page"}>
+            Runs <span>{length(@runs)}</span>
+          </.link>
+          <.link
+            navigate="/app/connections"
+            aria-current={if @live_action == :connections, do: "page"}
+          >
+            Connections
+          </.link>
+          <.link navigate="/app/executors" aria-current={if @live_action == :executors, do: "page"}>
+            Executors
+          </.link>
+        </nav>
+        <div class="sidebar-bottom">
+          <span class="badge">Private evaluation</span>
+          <p class="fine">{@scope.email}</p>
+          <form action="/logout" method="post">
+            <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+            <button class="quiet">
+              Sign out
+            </button>
+          </form>
+        </div>
+      </aside>
+      <main id="main" class="main">
+        <header class="topline">
+          <span>Development workspace</span><span class="fine">Local execution · Cloud coordination</span>
+        </header>
+        <p :if={@flash["error"]} role="alert" class="alert error">{@flash["error"]}</p>
+        <p :if={@flash["info"]} role="status" class="alert">{@flash["info"]}</p>
+        <section :if={@live_action == :projects}>
+          <.heading
+            eyebrow="From issue to delivery"
+            title="Make room for work that ships."
+            description="Each project has its own repository, instructions, connections and execution limits."
+          />
+          <div class="split">
+            <div>
+              <.empty
+                :if={@projects == []}
+                title="Start with one project"
+                description="Add a repository, connect your tools and pair a local executor. Your existing Symphony setup stays separate."
+              />
+              <.link :for={p <- @projects} class="project-row" navigate={"/app/projects/" <> p.id}>
+                <div>
+                  <h2>{p.name}</h2>
+                  <p class="mono muted">{p.repository}</p>
+                </div>
+                <span class="badge">{p.base_branch} ↗</span>
+              </.link>
+            </div>
+            <section class="panel">
+              <h2>New project</h2>
+              <form phx-submit="create_project">
+                <.field name="name" label="Project name" required /><.field
+                  name="repository"
+                  label="GitHub repository"
+                  placeholder="owner/repository"
+                  required
+                /><.field name="base_branch" label="PR target branch" value="main" required />
+                <button>
+                  Create project
+                </button>
+              </form>
+            </section>
+          </div>
+        </section>
+        <section :if={@live_action == :project and @selected}>
+          <.heading
+            eyebrow={@selected.repository}
+            title={@selected.name}
+            description="Rules are versioned. Saving changes only affects future execution attempts."
+          />
+          <div class="split">
+            <section class="panel">
+              <h2>Project rules</h2>
+              <form id="project-rules" phx-submit="save_project">
+                <.field name="name" label="Project name" value={@selected.name} required /><.field
+                  name="repository"
+                  label="GitHub repository"
+                  value={@selected.repository}
+                  required
+                /><.field
+                  name="base_branch"
+                  label="PR target branch"
+                  value={@selected.base_branch}
+                  required
+                />
+                <label>
+                  Instructions<textarea name="instructions" rows="7" maxlength="32000">{@selected.data["instructions"]}</textarea>
+                </label>
+                <.field
+                  name="concurrency"
+                  type="number"
+                  label="Parallel tasks (1–10)"
+                  value={@selected.data["concurrency"]}
+                /><.field
+                  name="model"
+                  label="Model override (optional)"
+                  value={@selected.data["model"]}
+                />
+                <.field
+                  name="linear_team"
+                  label="Linear team ID"
+                  value={@selected.data["linear_team"]}
+                /><.field
+                  name="linear_project"
+                  label="Linear project ID"
+                  value={@selected.data["linear_project"]}
+                />
+                <.field
+                  name="review_state"
+                  label="Linear review state"
+                  value={@selected.data["review_state"]}
+                /><.field
+                  name="slack_channel"
+                  label="Slack channel ID"
+                  value={@selected.data["slack_channel"]}
+                />
+                <button>Save project rules</button>
+              </form>
+            </section>
+            <section class="panel">
+              <h2>Connect this project</h2>
+              <p class="muted">Only explicitly connected accounts can be used by this project.</p>
+              <div :for={provider <- ~w(github linear slack)} class="connection-row">
+                <strong>{String.capitalize(provider)}</strong>
+                <form
+                  :if={
+                    DevOrchestrator.Connections.OAuth.configured?(provider) and @scope.role == "owner"
+                  }
+                  method="post"
+                  action={"/connections/#{provider}/start"}
+                >
+                  <input
+                    type="hidden"
+                    name="_csrf_token"
+                    value={Plug.CSRFProtection.get_csrf_token()}
+                  /><input type="hidden" name="project_id" value={@selected.id} />
+                  <button class="secondary">
+                    Connect
+                  </button>
+                </form>
+                <span :if={!DevOrchestrator.Connections.OAuth.configured?(provider)} class="badge">
+                  App not configured
+                </span>
+              </div>
+              <p class="fine muted">
+                Codex authenticates on the executor, not here. Invite your Slack bot to the selected channel.
+              </p>
+            </section>
+          </div>
+        </section>
+        <section :if={@live_action == :connections}>
+          <.heading
+            eyebrow="Tools with boundaries"
+            title="Connected accounts"
+            description="Connections are granted to individual projects. Provider secrets are never shown in the browser."
+          />
+          <.empty
+            :if={@connections == []}
+            title="No accounts connected"
+            description="Open a project to connect GitHub, Linear and Slack. The operator must first configure each provider application."
+          />
+          <div :for={c <- @connections} class="project-row">
+            <div>
+              <h2>{c["label"]}</h2>
+              <span class="badge">{if c["revoked_at"], do: "Disconnected", else: "Authorized"}</span>
+              <p class="mono fine">{c["id"]}</p>
+            </div>
+            <button
+              :if={@scope.role == "owner" and !c["revoked_at"]}
+              class="secondary"
+              phx-click="disconnect"
+              phx-value-id={c["id"]}
+              data-confirm="Disable this connection?"
+            >
+              Disconnect
+            </button>
+          </div>
+        </section>
+        <section :if={@live_action == :executors}>
+          <.heading
+            eyebrow="Your account stays local"
+            title="Execution, on your terms."
+            description="Pair a machine, approve its projects, and authorize repository roots on that machine. No inbound port is opened."
+          />
+          <button :if={@scope.role == "owner"} phx-click="pair">Create pairing code</button>
+          <div :if={@code} class="panel">
+            <h2>Pair within 10 minutes</h2>
+            <p>Run in the connector directory on the machine you want to use:</p>
+            <pre>node --experimental-strip-types src/cli.ts pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config /absolute/path/connector.json</pre>
+            <p class="fine">
+              This code is single use. Project access must still be granted below and locally.
+            </p>
+          </div>
+          <.empty
+            :if={@executors == []}
+            title="No machines paired"
+            description="Create a pairing code, then run the connector with your existing Codex login."
+          />
+          <div :for={e <- @executors} class="project-row">
+            <div>
+              <h2>{e["name"]}</h2>
+              <span class="badge">{executor_status(e)}</span>
+              <p class="mono fine">{e["id"]}</p>
+            </div>
+            <button
+              :if={@scope.role == "owner" and !e["revoked_at"]}
+              phx-click="revoke"
+              phx-value-id={e["id"]}
+              class="secondary"
+            >
+              Revoke access
+            </button>
+          </div>
+          <form
+            :if={@scope.role == "owner" and @executors != [] and @projects != []}
+            class="panel"
+            phx-submit="bind"
+          >
+            <h2>Authorize a project</h2>
+            <label>
+              Executor<select name="executor_id"><option
+                  :for={e <- @executors}
+                  :if={!e["revoked_at"]}
+                  value={e["id"]}
+                >{e["name"]}</option></select>
+            </label>
+            <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select></label><button>Authorize project</button>
+            <p class="fine muted">
+              {length(@bindings)} project bindings configured. The local allowlist is still required.
+            </p>
+          </form>
+        </section>
+        <section :if={@live_action == :runs}>
+          <.heading
+            eyebrow="The delivery loop"
+            title="Work in motion"
+            description="Track the task, not a terminal. Results appear here and in your project's Slack channel."
+          />
+          <.run_list runs={@runs} />
+          <form :if={@projects != []} class="panel" phx-submit="create_run">
+            <h2>New task</h2>
+            <label>
+              Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select>
+            </label>
+            <.field name="title" label="Task title" required />
+            <label>
+              Instructions<textarea name="prompt" required rows="4" maxlength="32000"></textarea>
+            </label>
+            <button>Queue task</button>
+          </form>
+        </section>
+        <section :if={@live_action == :run and @selected_run}>
+          <.heading
+            eyebrow="Run details"
+            title={@selected_run["title"]}
+            description="Only verified delivery counts as success. Files and commits are preserved when work is interrupted."
+          />
+          <div class="delivery-rail">
+            <span class="badge">{humanize(@selected_run["state"])}</span><span>Attempt {@selected_run["generation"]}</span><span>Lifecycle {@selected_run["lifecycle"]}</span>
+          </div>
+          <section :if={@selected_run["result"]} class="panel">
+            <h2>Result</h2>
+            <p>{@selected_run["result"]["summary"]}</p>
+            <a
+              :if={@selected_run["result"]["pr_url"]}
+              href={@selected_run["result"]["pr_url"]}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="button"
+            >
+              Review pull request ↗
+            </a>
+          </section>
+          <ol class="timeline">
+            <li :for={e <- @events}>
+              <span class="mono fine">{Calendar.strftime(e["created_at"], "%H:%M:%S")}</span><strong>{humanize(e["kind"])}</strong><span class="muted">{e["data"]["category"]}</span>
+            </li>
+          </ol>
+          <section :if={@deliveries != []} class="panel">
+            <h2>Report delivery</h2>
+            <div :for={d <- @deliveries} class="connection-row">
+              <span>{humanize(d["kind"])}</span><span class="badge">{humanize(d["state"])}</span>
+            </div>
+          </section>
+          <div :if={@scope.role == "owner"} class="actions">
+            <button
+              :if={@selected_run["state"] in ~w(blocked failed cancelled)}
+              phx-click="retry"
+              phx-value-id={@selected_run["id"]}
+            >
+              Start new lifecycle
+            </button>
+            <button
+              :if={@selected_run["state"] not in ~w(succeeded failed cancelled)}
+              phx-click="cancel"
+              phx-value-id={@selected_run["id"]}
+              class="secondary"
+            >Cancel task</button>
+          </div>
+        </section>
+        <.empty
+          :if={@live_action in [:project, :run] and is_nil(@selected) and is_nil(@selected_run)}
+          title="Not found"
+          description="This resource does not exist in your workspace."
+        />
+      </main>
+    </div>
+    """
+  end
+end
