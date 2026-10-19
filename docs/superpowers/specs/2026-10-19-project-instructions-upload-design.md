@@ -10,9 +10,11 @@ isolated checkout.
 2. They tailor the guidance for the repository and upload that file when
    creating the project. Existing projects can replace it from Project rules.
 3. The app validates and stores its UTF-8 Markdown contents with the project.
-4. Each task snapshots that content. The local connector writes the snapshot
-   to its private task metadata directory as `WORKFLOW.md` and tells the coding
-   agent to read it before acting.
+4. Each task snapshots the saved content. The local connector writes a
+   non-empty snapshot to its private task metadata directory as `WORKFLOW.md`
+   and tells the coding agent to read it before acting. A legacy project with
+   no saved instructions keeps its current behavior until its owner uploads a
+   file; it remains executable during rollout.
 
 The UI, downloaded template and customer-facing validation messages use only
 `instructions.md`. The generated internal file stays outside Git's tracked
@@ -84,10 +86,12 @@ content with a visible field error. A failed upload or save must leave the
 previously saved project instructions unchanged.
 
 Include an upload on project creation and project settings. Require valid
-instructions to create a project or save project rules. Existing saved rules
-remain usable; owners replace them by uploading a new file. Do not log contents
-or expose them in public project, event, executor or API responses except the
-authenticated immutable task snapshot needed by its bound executor.
+instructions to create a project. On existing projects, replacement upload is
+optional when saving other rules; owners can add or replace the file later.
+Existing projects without saved instructions remain executable and do not
+receive a generated internal file until an owner uploads one. Do not log
+contents or expose them in public project, event, executor or API responses
+except the authenticated immutable task snapshot needed by its bound executor.
 
 Before starting the coding agent, the connector writes the snapshotted text to
 the task checkout's private `.git` metadata directory under the internal name
