@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Journal } from "./journal.ts";
 import { API, APIError } from "./api.ts";
 import { CodexSession, RepeatedFailureError, CodexBlockedError } from "./codex.ts";
-import { prepareWorkspace } from "./workspace.ts";
+import { prepareWorkspace, writeProjectInstructions } from "./workspace.ts";
 import { Publisher } from "./publisher.ts";
 import type { Config, JournalState } from "./types.ts";
 
@@ -56,7 +56,7 @@ export async function runLoop(config:Config,root:string,signal:AbortSignal):Prom
   }
 }
 
-async function execute(config:Config,api:Transport,journal:Journal,state:JournalState,claimStarted:number,signal:AbortSignal):Promise<void> {
+export async function execute(config:Config,api:Transport,journal:Journal,state:JournalState,claimStarted:number,signal:AbortSignal):Promise<void> {
   const controller=new AbortController();
   let session:CodexSession|undefined;
   let phase="local_policy_denied";
@@ -80,6 +80,8 @@ async function execute(config:Config,api:Transport,journal:Journal,state:Journal
     const mapping=config.mappings.find(m=>m.projectId===state.lease.project_id);
     if(!mapping)throw new Error("Project not authorized locally.");
     const workspace=await prepareWorkspace(mapping,state.lease);
+    const snapshot=state.lease.snapshot??{};
+    const instructionsPath=await writeProjectInstructions(workspace.path,snapshot.instructions??"");
     state.workspace=workspace.path;state.baseline=workspace.baseline;await journal.save(state);
     if(controller.signal.aborted)throw new Error("Lease ended.");
     await emitDurably(api,journal,state,"started",{});
@@ -88,13 +90,14 @@ async function execute(config:Config,api:Transport,journal:Journal,state:Journal
     await session.initialize();
     if(!await session.authenticated())throw new Error("Local account is not signed in.");
     phase="execution_failed";
-    const snapshot=state.lease.snapshot??{};
     const prompt=[
       "Implement this development task end to end in this isolated checkout.",
       "Read and respect the repository's AGENTS.md and project-scoped skills. Do not change global skills or configuration.",
       "Validate changes and create a Conventional Commit on the existing issue branch. Do not push, create a PR, merge, or deploy: the trusted connector handles publication after your turn.",
       "Do not invent external access or credentials. If essential context is missing, report a real blocker. Network access is disabled in this evaluation sandbox.",
-      "Project instructions:\n"+String(snapshot.instructions??""),
+      instructionsPath
+        ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
+        : "Project instructions:\n"+String(snapshot.instructions??""),
       "Task: "+String(state.lease.title??""),String(state.lease.prompt??"")
     ].join("\n\n");
     await session.run(workspace.path,prompt,typeof snapshot.model==="string"?snapshot.model:undefined,controller.signal);

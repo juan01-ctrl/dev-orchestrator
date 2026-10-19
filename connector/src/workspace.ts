@@ -1,4 +1,4 @@
-import { lstat, realpath, mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, realpath, mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 import { join, relative, isAbsolute, sep } from "node:path";
 import { command, readAuthor } from "./process.ts";
 import type { Mapping, Lease } from "./types.ts";
@@ -51,4 +51,27 @@ export async function prepareWorkspace(mapping:Mapping,lease:Lease):Promise<{pat
     await writeFile(join(path,".git","orchestrator.json"),JSON.stringify({run:lease.id,lifecycle:lease.lifecycle,repository:mapping.repository,baseline}),{mode:0o600,flag:"wx"});
     return {path,branch,baseline};
   } catch { throw new Error("Workspace setup failed. Preserved the partial checkout for inspection; check the source branch and Git identity."); }
+}
+
+export async function writeProjectInstructions(workspace:string,instructions:unknown):Promise<string|undefined> {
+  if(typeof instructions!=="string")throw new Error("Project instructions snapshot must be text.");
+  if(Buffer.byteLength(instructions,"utf8")>32_000)throw new Error("Project instructions snapshot exceeds the size limit.");
+  if(instructions==="")return undefined;
+  if(!isAbsolute(workspace))throw new Error("Task checkout path must be absolute.");
+
+  const canonical=await realpath(workspace);
+  if(canonical!==workspace.replace(/\/$/,""))throw new Error("Task checkout path must be canonical.");
+  const gitDirectory=join(canonical,".git");
+  const gitStat=await lstat(gitDirectory);
+  if(!gitStat.isDirectory() || gitStat.isSymbolicLink())throw new Error("Task checkout Git metadata is not a real directory.");
+
+  const target=join(gitDirectory,"WORKFLOW.md");
+  try {
+    if((await lstat(target)).isSymbolicLink())throw new Error("Project instructions target must not be a symlink.");
+  } catch(error) {
+    if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;
+  }
+  await writeFile(target,instructions,{encoding:"utf8",mode:0o600});
+  await chmod(target,0o600);
+  return target;
 }
