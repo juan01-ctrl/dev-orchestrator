@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, symlink, writeFile, rm, realpath, readFile, stat } from "node:fs/promises";
+import { mkdtemp, mkdir, symlink, writeFile, rm, realpath, readFile, stat, link, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -62,6 +62,15 @@ test("project instructions stay private to task metadata and outside the Git dif
     assert.equal(await writeProjectInstructions(prepared.path,""),undefined);
     await assert.rejects(writeProjectInstructions(prepared.path,42));
     await assert.rejects(writeProjectInstructions(prepared.path,"x".repeat(32_001)));
+
+    const fixture=join(prepared.path,".git","metadata-fixture");
+    const target=join(prepared.path,".git","WORKFLOW.md");
+    await writeFile(fixture,"protected metadata\n");
+    await unlink(target);
+    await link(fixture,target);
+    await writeProjectInstructions(prepared.path,"# Replacement\n");
+    assert.equal(await readFile(fixture,"utf8"),"protected metadata\n");
+    assert.equal(await readFile(target,"utf8"),"# Replacement\n");
     assert.equal(execFileSync("git",["-C",prepared.path,"status","--porcelain"],{encoding:"utf8"}).trim(),"");
   } finally {await rm(root,{recursive:true,force:true});}
 });

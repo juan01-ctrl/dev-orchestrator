@@ -1,4 +1,5 @@
-import { lstat, realpath, mkdir, readFile, writeFile, chmod } from "node:fs/promises";
+import { lstat, realpath, mkdir, readFile, writeFile, chmod, rename, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join, relative, isAbsolute, sep } from "node:path";
 import { command, readAuthor } from "./process.ts";
 import type { Mapping, Lease } from "./types.ts";
@@ -71,7 +72,14 @@ export async function writeProjectInstructions(workspace:string,instructions:unk
   } catch(error) {
     if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;
   }
-  await writeFile(target,instructions,{encoding:"utf8",mode:0o600});
-  await chmod(target,0o600);
+  const temporary=join(gitDirectory,`.instructions-${randomUUID()}`);
+  try {
+    await writeFile(temporary,instructions,{encoding:"utf8",mode:0o600,flag:"wx"});
+    await chmod(temporary,0o600);
+    await rename(temporary,target);
+  } catch(error) {
+    await unlink(temporary).catch(()=>{});
+    throw error;
+  }
   return target;
 }
