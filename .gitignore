@@ -1,0 +1,15 @@
+/.superpowers/
+**/deps/
+**/_build/
+**/node_modules/
+**/dist/
+**/cover/
+**/.DS_Store
+/.runtime/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.ez
+erl_crash.dump
