@@ -61,9 +61,9 @@ completion reports:
 
 - Work on the task's assigned branch.
 - Use a clear, conventional commit message.
-- Prepare a pull request against the configured target branch when the task is
-  complete and contains changes.
-- Do not merge, deploy, or make destructive changes.
+- Do not push, merge, deploy, or open a pull request; the configured delivery
+  process handles publication.
+- Do not make destructive changes.
 
 ## Completion report
 

@@ -10,7 +10,11 @@ defmodule DevOrchestratorWeb.Endpoint do
     http_only: true
   ]
   socket("/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session_options]])
-  plug(Plug.Static, at: "/", from: :dev_orchestrator, only: ~w(assets))
+  plug(Plug.Static,
+    at: "/",
+    from: :dev_orchestrator,
+    only: ~w(assets templates)
+  )
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
 
@@ -38,6 +42,7 @@ defmodule DevOrchestratorWeb.Endpoint do
     Plug.Session.call(conn, Plug.Session.init(opts))
   end
 end
+
 
 defmodule DevOrchestratorWeb.RawBody do
   def read_body(conn, opts) do

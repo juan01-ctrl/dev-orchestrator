@@ -27,7 +27,12 @@ mise exec -- mix phx.server
 
 Open [the application](http://localhost:4100), register a workspace and verify
 the email through the local [development mailbox](http://localhost:4100/dev/mailbox).
-Create a project using `owner/repository` and an explicit PR target branch.
+When creating a project, download the `instructions.md` template, tailor it to
+the repository, and upload it with the repository and PR target branch. Existing
+projects can replace their instructions from **Project rules**. Changes apply
+to future task runs; active runs keep the instructions they already received.
+The upload must be a non-empty UTF-8 Markdown file named `instructions.md` and
+no larger than 32 KB.
 
 For service integrations, first configure your own provider applications as
 described in [connections](docs/connections.md). Missing configuration is shown

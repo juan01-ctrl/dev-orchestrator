@@ -1,6 +1,47 @@
 defmodule DevOrchestrator.Connections.GitHub do
   alias DevOrchestrator.Connections.{HTTP, OAuth}
 
+  def installation_url(state) when is_binary(state) do
+    slug = OAuth.config("github")[:app_slug]
+
+    if is_binary(slug) and Regex.match?(~r/\A[a-zA-Z0-9-]+\z/, slug) do
+      {:ok,
+       "https://github.com/apps/#{slug}/installations/new?" <>
+         URI.encode_query(%{state: state})}
+    else
+      {:error, :not_configured}
+    end
+  end
+
+  def installation_url(_), do: {:error, :invalid_state}
+
+  def verify_installation(installation_id, repository)
+      when is_binary(installation_id) and is_binary(repository) do
+    with [account, repo] <- String.split(repository, "/", parts: 2),
+         true <- account != "" and repo != "",
+         {id, ""} when id > 0 <- Integer.parse(installation_id),
+         {:ok, jwt} <- jwt(),
+         {:ok, %{"token" => token}} when is_binary(token) and token != "" <-
+           api(:post, "/app/installations/#{id}/access_tokens", jwt, json: %{}),
+         {:ok, %{"total_count" => total, "repositories" => repositories}}
+         when is_integer(total) and is_list(repositories) <-
+           api(:get, "/installation/repositories?per_page=100", token),
+         true <- total <= 100,
+         true <- Enum.any?(repositories, &(&1["full_name"] == repository)) do
+      {:ok, %{installation_id: id, account: account}}
+    else
+      false -> {:error, :installation_required}
+      nil -> {:error, :installation_required}
+      {:error, :provider_rejected} -> {:error, :installation_required}
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_provider_response}
+    end
+  rescue
+    _ -> {:error, :invalid_provider_response}
+  end
+
+  def verify_installation(_, _), do: {:error, :invalid_installation}
+
   def bind_installation(user_token, repository) do
     with {:ok, %{"installations" => installations}} <-
            api(:get, "/user/installations?per_page=100", user_token) do

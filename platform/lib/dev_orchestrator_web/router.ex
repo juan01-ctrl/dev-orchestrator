@@ -40,6 +40,8 @@ defmodule DevOrchestratorWeb.Router do
 
   scope "/", DevOrchestratorWeb do
     pipe_through([:browser, :signed_in])
+    post("/connections/github/install/start", OAuthController, :install_start)
+    get("/connections/github/install/callback", OAuthController, :install_callback)
     post("/connections/:provider/start", OAuthController, :start)
     get("/connections/:provider/callback", OAuthController, :callback)
 

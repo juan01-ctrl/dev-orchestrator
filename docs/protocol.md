@@ -16,6 +16,12 @@ HTTPS is required outside loopback development. Redirects are not followed.
 
 A lease contains `id`, `project_id`, `generation`, `lifecycle`, `sequence`,
 `expires_in_ms` (90,000), task title/prompt and immutable project `snapshot`.
+The snapshot includes the project's saved `instructions` text. The connector
+uses that value in the isolated task checkout; it does not fetch mutable project
+rules while a task is running. Existing projects with empty instructions remain
+compatible, and subsequent runs receive a replacement only after the owner saves
+it. The app accepts a non-empty UTF-8 Markdown `instructions.md` file up to
+32,000 bytes when creating or updating project guidance.
 The snapshot never contains credentials or a server-selected executable path.
 
 Events are `started`, `progress`, `failure`, `blocked`, `candidate`, `no_changes`.

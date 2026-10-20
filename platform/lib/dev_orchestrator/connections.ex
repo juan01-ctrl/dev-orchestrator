@@ -9,6 +9,94 @@ defmodule DevOrchestrator.Connections do
     )
   end
 
+  def start_github_installation(scope, project_id, session) do
+    cond do
+      not Accounts.owner?(scope) ->
+        {:error, :forbidden}
+
+      not OAuth.configured?("github") ->
+        {:error, :not_configured}
+
+      not (is_binary(session) and session != "") ->
+        {:error, :invalid_state}
+
+      true ->
+        with {:ok, project} <- Projects.get_project(scope, project_id) do
+          state = Store.token()
+
+          with {:ok, url} <- GitHub.installation_url(state) do
+            Store.exec(
+              "INSERT INTO github_install_states(hash,organization_id,user_id,project_id,repository,session_hash,expires_at) VALUES($1,$2,$3,$4,$5,$6,now()+interval '10 minutes')",
+              [
+                Store.digest(state),
+                scope.organization_id,
+                scope.user_id,
+                project_id,
+                project.repository,
+                Store.digest(session)
+              ]
+            )
+
+            {:ok, url}
+          end
+        end
+    end
+  end
+
+  def complete_github_installation(scope, state, installation_id, session) do
+    with {:ok, pending} <- consume_github_install_state(scope, state, session),
+         {:ok, project} <- Projects.get_project(scope, pending["project_id"]),
+         true <- project.repository == pending["repository"] do
+      case GitHub.verify_installation(installation_id, pending["repository"]) do
+        {:ok, installation} ->
+          Store.exec(
+            "INSERT INTO github_app_installations(organization_id,project_id,repository,installation_id,account,verified_at) VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(organization_id,project_id) DO UPDATE SET repository=EXCLUDED.repository,installation_id=EXCLUDED.installation_id,account=EXCLUDED.account,verified_at=now()",
+            [
+              scope.organization_id,
+              pending["project_id"],
+              pending["repository"],
+              installation.installation_id,
+              installation.account
+            ]
+          )
+
+          {:ok, pending["project_id"]}
+
+        {:error, :installation_required} = error ->
+          Store.exec(
+            "DELETE FROM github_app_installations WHERE organization_id=$1 AND project_id=$2 AND repository=$3",
+            [scope.organization_id, pending["project_id"], pending["repository"]]
+          )
+
+          error
+
+        error ->
+          error
+      end
+    else
+      false -> {:error, :repository_changed}
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_state}
+    end
+  end
+
+  def github_status(scope, project_id) do
+    with {:ok, project} <- Projects.get_project(scope, project_id),
+         %{"installation_id" => _} = installation <-
+           Store.one(
+             "SELECT installation_id FROM github_app_installations WHERE organization_id=$1 AND project_id=$2 AND repository=$3",
+             [scope.organization_id, project.id, project.repository]
+           ) do
+      connection = for_project(scope.organization_id, project_id, "github")
+
+      if connection && connection["external_id"] == to_string(installation["installation_id"]),
+        do: :connected,
+        else: :installed
+    else
+      _ -> :not_installed
+    end
+  end
+
   def start_oauth(scope, provider, project_id, session) do
     with true <- Accounts.owner?(scope),
          {:ok, _} <- Projects.get_project(scope, project_id),
@@ -56,6 +144,28 @@ defmodule DevOrchestrator.Connections do
   end
 
   def consume_state(_, _, _, _), do: {:error, :invalid_state}
+
+  defp consume_github_install_state(scope, state, session)
+       when is_binary(state) and is_binary(session) and session != "" do
+    if Accounts.owner?(scope) do
+      case Store.one(
+             "DELETE FROM github_install_states WHERE hash=$1 AND organization_id=$2 AND user_id=$3 AND session_hash=$4 AND expires_at>now() RETURNING organization_id,user_id,project_id,repository",
+             [
+               Store.digest(state),
+               scope.organization_id,
+               scope.user_id,
+               Store.digest(session)
+             ]
+           ) do
+        nil -> {:error, :invalid_state}
+        row -> {:ok, row}
+      end
+    else
+      {:error, :forbidden}
+    end
+  end
+
+  defp consume_github_install_state(_, _, _), do: {:error, :invalid_state}
 
   def complete_oauth(scope, provider, state, code, session) do
     with {:ok, project_id} <- consume_state(scope, provider, state, session),

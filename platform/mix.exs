@@ -8,6 +8,7 @@ defmodule DevOrchestrator.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      test_ignore_filters: ["test/offline.exs"],
       deps: deps(),
       aliases: aliases()
     ]
@@ -35,14 +36,15 @@ defmodule DevOrchestrator.MixProject do
       {:swoosh, "~> 1.19"},
       {:gen_smtp, "~> 1.3"},
       {:pbkdf2_elixir, "~> 2.3"},
-      {:floki, ">= 0.30.0", only: :test}
+      {:lazy_html, "~> 0.1.0", only: :test}
     ]
   end
 
   defp aliases do
     [
-      setup: ["deps.get", "ecto.create", "ecto.migrate"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"]
+      setup: ["deps.get", "assets.copy", "ecto.create", "ecto.migrate"],
+      "phx.server": ["assets.copy", "phx.server"],
+      test: ["assets.copy", "ecto.create --quiet", "ecto.migrate --quiet", "test"]
     ]
   end
 end

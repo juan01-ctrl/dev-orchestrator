@@ -36,6 +36,27 @@ defmodule DevOrchestrator.RunsTest do
     assert lease["snapshot"]["base_branch"] == "main"
   end
 
+  test "active leases keep their instructions snapshot while later runs get updates", ctx do
+    {:ok, _} =
+      Projects.update_project(ctx.scope, ctx.project.id, %{
+        "concurrency" => 2,
+        "instructions" => "# First version\n"
+      })
+
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "First", "prompt" => "One"})
+    assert {:ok, first_lease} = Runs.claim(ctx.executor)
+    assert first_lease["snapshot"]["instructions"] == "# First version\n"
+
+    {:ok, _} =
+      Projects.update_project(ctx.scope, ctx.project.id, %{"instructions" => "# Second version\n"})
+
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Second", "prompt" => "Two"})
+    assert {:ok, second_lease} = Runs.claim(ctx.executor)
+
+    assert first_lease["snapshot"]["instructions"] == "# First version\n"
+    assert second_lease["snapshot"]["instructions"] == "# Second version\n"
+  end
+
   test "duplicate events are idempotent and stale generations cannot finalize", ctx do
     {:ok, _} =
       Runs.create(ctx.scope, ctx.project.id, %{"title" => "First", "prompt" => "Create a file"})

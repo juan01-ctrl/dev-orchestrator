@@ -88,6 +88,18 @@ defmodule DevOrchestrator.Projects do
         ~w(id name repository base_branch instructions concurrency version model linear_team linear_project active_states review_state slack_channel)
       )
 
+  def validate_instructions(filename, bytes) when is_binary(filename) and is_binary(bytes) do
+    cond do
+      filename != "instructions.md" -> {:error, :invalid_filename}
+      byte_size(bytes) > 32_000 -> {:error, :too_large}
+      not String.valid?(bytes) -> {:error, :invalid_encoding}
+      String.trim(bytes) == "" -> {:error, :empty}
+      true -> {:ok, bytes}
+    end
+  end
+
+  def validate_instructions(_, _), do: {:error, :invalid_file}
+
   defp public(row),
     do: %{
       id: row["id"],

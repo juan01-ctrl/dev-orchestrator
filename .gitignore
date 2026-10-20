@@ -15,3 +15,6 @@
 *.key
 *.ez
 erl_crash.dump
+/platform/priv/static/assets/phoenix.mjs
+/platform/priv/static/assets/phoenix_html.js
+/platform/priv/static/assets/phoenix_live_view.esm.js

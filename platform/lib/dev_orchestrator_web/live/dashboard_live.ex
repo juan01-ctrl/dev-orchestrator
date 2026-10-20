@@ -7,11 +7,18 @@ defmodule DevOrchestratorWeb.DashboardLive do
     if connected?(socket), do: Process.send_after(self(), :refresh, 5_000)
 
     {:ok,
-     assign(socket,
+     socket
+     |> assign(
        session_token: session["session_token"],
        code: nil,
        selected: nil,
-       selected_run: nil
+       selected_run: nil,
+       instruction_error: nil
+     )
+     |> allow_upload(:instructions,
+       accept: ~w(.md),
+       max_entries: 1,
+       max_file_size: 32_000
      )}
   end
 
@@ -31,30 +38,54 @@ defmodule DevOrchestratorWeb.DashboardLive do
   end
 
   defp dispatch("create_project", params, socket) do
-    case Projects.create_project(socket.assigns.scope, params) do
-      {:ok, project} ->
-        {:noreply, push_navigate(socket, to: "/app/projects/" <> project.id)}
+    case consume_instructions(socket, :required) do
+      {:ok, instructions} ->
+        case Projects.create_project(
+               socket.assigns.scope,
+               Map.put(params, "instructions", instructions)
+             ) do
+          {:ok, project} ->
+            {:noreply, push_navigate(socket, to: "/app/projects/" <> project.id)}
 
-      _ ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "Check the project name, owner/repository, branch and concurrency."
-         )}
+          _ ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Check the project name, repository, branch and concurrency."
+             )}
+        end
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :instruction_error, instruction_error(reason))}
     end
   end
 
   defp dispatch("save_project", params, socket) do
-    case Projects.update_project(socket.assigns.scope, socket.assigns.params["id"], params) do
-      {:ok, _} ->
-        {:noreply,
-         socket |> put_flash(:info, "Project rules saved for future attempts.") |> refresh()}
+    case consume_instructions(socket, :optional) do
+      {:ok, instructions} ->
+        params = if instructions, do: Map.put(params, "instructions", instructions), else: params
 
-      _ ->
-        {:noreply, put_flash(socket, :error, "Project rules were not saved. Check the fields.")}
+        case Projects.update_project(socket.assigns.scope, socket.assigns.params["id"], params) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> assign(:instruction_error, nil)
+             |> put_flash(:info, "Project rules saved for future attempts.")
+             |> refresh()}
+
+          _ ->
+            {:noreply,
+             put_flash(socket, :error, "Project rules were not saved. Check the fields.")}
+        end
+
+      {:error, reason} ->
+        {:noreply, assign(socket, :instruction_error, instruction_error(reason))}
     end
   end
+
+  defp dispatch("validate_project_upload", _params, socket),
+    do: {:noreply, assign(socket, :instruction_error, nil)}
 
   defp dispatch("create_run", params, socket) do
     case Runs.create(socket.assigns.scope, params["project_id"], params) do
@@ -118,6 +149,42 @@ defmodule DevOrchestratorWeb.DashboardLive do
 
   defp dispatch(_, _, socket), do: {:noreply, socket}
 
+  defp consume_instructions(socket, requirement) do
+    upload = socket.assigns.uploads.instructions
+
+    if Enum.any?(upload.entries, &(not &1.valid?)) do
+      {:error, :invalid_file}
+    else
+      case consume_uploaded_entries(socket, :instructions, fn %{path: path}, entry ->
+             result =
+               with {:ok, bytes} <- File.read(path),
+                    result <- Projects.validate_instructions(entry.client_name, bytes) do
+                 result
+               else
+                 _ -> {:error, :invalid_file}
+               end
+
+             {:ok, result}
+           end) do
+        [result] -> result
+        [] when requirement == :required -> {:error, :required}
+        [] -> {:ok, nil}
+      end
+    end
+  end
+
+  defp instruction_error(:required),
+    do: "Upload a non-empty instructions.md file to create this project."
+
+  defp instruction_error(:invalid_filename), do: "Choose the file named instructions.md."
+  defp instruction_error(:too_large), do: "The instructions file must be 32 KB or smaller."
+  defp instruction_error(:invalid_encoding), do: "The instructions file must use UTF-8 text."
+  defp instruction_error(:empty), do: "The instructions file cannot be empty."
+  defp instruction_error(_), do: "Choose a valid, non-empty Markdown file no larger than 32 KB."
+
+  defp provider_name("github"), do: "GitHub"
+  defp provider_name(provider), do: String.capitalize(provider)
+
   defp action(socket, result, message) do
     if result == :ok or match?({:ok, _}, result),
       do: {:noreply, socket |> put_flash(:info, message) |> refresh()},
@@ -149,6 +216,11 @@ defmodule DevOrchestratorWeb.DashboardLive do
           scope: scope,
           projects: Projects.list(scope),
           connections: Connections.list(scope),
+          github_status:
+            if(selected,
+              do: Connections.github_status(scope, selected.id),
+              else: :not_installed
+            ),
           executors: Executors.list(scope),
           bindings: Executors.bindings(scope),
           runs: Runs.list(scope),
@@ -227,13 +299,26 @@ defmodule DevOrchestratorWeb.DashboardLive do
             </div>
             <section class="panel">
               <h2>New project</h2>
-              <form phx-submit="create_project">
+              <form phx-change="validate_project_upload" phx-submit="create_project">
                 <.field name="name" label="Project name" required /><.field
                   name="repository"
                   label="GitHub repository"
                   placeholder="owner/repository"
                   required
                 /><.field name="base_branch" label="PR target branch" value="main" required />
+                <label>Project instructions</label>
+                <p class="fine">
+                  <a href="/templates/instructions.md" download="instructions.md">
+                    Download instructions.md template
+                  </a>
+                </p>
+                <p class="fine muted">
+                  Upload a non-empty UTF-8 Markdown file named instructions.md (32 KB max).
+                </p>
+                <.live_file_input upload={@uploads.instructions} required />
+                <p :if={@instruction_error} id="instructions-error" role="alert" class="fine error">
+                  {@instruction_error}
+                </p>
                 <button>
                   Create project
                 </button>
@@ -250,7 +335,11 @@ defmodule DevOrchestratorWeb.DashboardLive do
           <div class="split">
             <section class="panel">
               <h2>Project rules</h2>
-              <form id="project-rules" phx-submit="save_project">
+              <form
+                id="project-rules"
+                phx-change="validate_project_upload"
+                phx-submit="save_project"
+              >
                 <.field name="name" label="Project name" value={@selected.name} required /><.field
                   name="repository"
                   label="GitHub repository"
@@ -262,9 +351,22 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   value={@selected.base_branch}
                   required
                 />
-                <label>
-                  Instructions<textarea name="instructions" rows="7" maxlength="32000">{@selected.data["instructions"]}</textarea>
-                </label>
+                <label>Project instructions</label>
+                <p class="fine">
+                  <a href="/templates/instructions.md" download="instructions.md">
+                    Download instructions.md template
+                  </a>
+                </p>
+                <p :if={@selected.data["instructions"] == ""} class="fine muted">
+                  No instructions file is saved yet. Upload one to add project guidance.
+                </p>
+                <p :if={@selected.data["instructions"] != ""} class="fine muted">
+                  Saved instructions stay in place unless you upload a replacement.
+                </p>
+                <.live_file_input upload={@uploads.instructions} />
+                <p :if={@instruction_error} id="instructions-error" role="alert" class="fine error">
+                  {@instruction_error}
+                </p>
                 <.field
                   name="concurrency"
                   type="number"
@@ -300,10 +402,28 @@ defmodule DevOrchestratorWeb.DashboardLive do
               <h2>Connect this project</h2>
               <p class="muted">Only explicitly connected accounts can be used by this project.</p>
               <div :for={provider <- ~w(github linear slack)} class="connection-row">
-                <strong>{String.capitalize(provider)}</strong>
+                <strong>{provider_name(provider)}</strong>
                 <form
                   :if={
-                    DevOrchestrator.Connections.OAuth.configured?(provider) and @scope.role == "owner"
+                    provider == "github" and @scope.role == "owner" and
+                      DevOrchestrator.Connections.OAuth.configured?("github") and
+                      @github_status == :not_installed
+                  }
+                  method="post"
+                  action="/connections/github/install/start"
+                >
+                  <input
+                    type="hidden"
+                    name="_csrf_token"
+                    value={Plug.CSRFProtection.get_csrf_token()}
+                  /><input type="hidden" name="project_id" value={@selected.id} />
+                  <button class="secondary">Install GitHub App</button>
+                </form>
+                <form
+                  :if={
+                    DevOrchestrator.Connections.OAuth.configured?(provider) and
+                      @scope.role == "owner" and
+                      (provider != "github" or @github_status == :installed)
                   }
                   method="post"
                   action={"/connections/#{provider}/start"}
@@ -314,13 +434,58 @@ defmodule DevOrchestratorWeb.DashboardLive do
                     value={Plug.CSRFProtection.get_csrf_token()}
                   /><input type="hidden" name="project_id" value={@selected.id} />
                   <button class="secondary">
-                    Connect
+                    Connect {provider_name(provider)}
                   </button>
                 </form>
-                <span :if={!DevOrchestrator.Connections.OAuth.configured?(provider)} class="badge">
-                  App not configured
+                <span
+                  :if={provider == "github" and @scope.role == "owner" and @github_status == :connected}
+                  class="badge"
+                >
+                  GitHub connected
+                </span>
+                <button
+                  :if={
+                    (!DevOrchestrator.Connections.OAuth.configured?(provider) or
+                       @scope.role != "owner") and
+                      not (provider == "github" and @scope.role == "owner" and
+                             @github_status == :connected)
+                  }
+                  class="secondary"
+                  disabled
+                >
+                  Connect {provider_name(provider)}
+                </button>
+                <span :if={@scope.role != "owner"} class="badge">
+                  Workspace owner required
+                </span>
+                <span
+                  :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?(provider)}
+                  class="badge"
+                >
+                  Server setup required
                 </span>
               </div>
+              <p
+                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("github")}
+                class="fine muted"
+              >
+                GitHub needs GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_APP_ID, GITHUB_APP_SLUG and GITHUB_PRIVATE_KEY_PATH on the server.
+              </p>
+              <p
+                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("linear")}
+                class="fine muted"
+              >
+                Linear needs LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET on the server.
+              </p>
+              <p
+                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("slack")}
+                class="fine muted"
+              >
+                Slack needs SLACK_CLIENT_ID and SLACK_CLIENT_SECRET on the server.
+              </p>
+              <p :if={@scope.role == "owner"} class="fine muted">
+                After configuring a provider app and its callback URLs, restart the server to enable its setup actions.
+              </p>
               <p class="fine muted">
                 Codex authenticates on the executor, not here. Invite your Slack bot to the selected channel.
               </p>

@@ -6,8 +6,13 @@ an account from a project. No credentials are imported from the old Symphony set
 
 ## GitHub
 
-Create a GitHub App, enable its user authorization flow, and configure callback
-`PUBLIC_URL/connections/github/callback`. Install the app only on approved repositories.
+Create a GitHub App, enable its user authorization flow, and configure OAuth callback
+`PUBLIC_URL/connections/github/callback`. Configure its **Setup URL** as
+`PUBLIC_URL/connections/github/install/callback` and enable **Redirect on update** so
+repository-access changes are rechecked. Do not select **Request user authorization
+(OAuth) during installation**; that option prevents GitHub from using a Setup URL.
+The setup callback and OAuth callback are separate steps. Install the app only on
+approved repositories.
 Grant repository metadata read and pull requests read permissions for verification.
 The customer host's separate GitHub CLI credentials perform publication; the cloud
 does not receive those credentials. The app's private key is used only by the cloud
@@ -17,11 +22,12 @@ Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_SLU
 and `GITHUB_PRIVATE_KEY_PATH`. Mount that private key read-only into the container
 using an operator-owned Compose override or secret mount; never add it to this repo.
 
-After installing the app, choose **Connect** from the project's GitHub row. The
-authorization verifies that the user can access an installation containing the
-project's repository. This initial version supports installation/repository lists
-of up to 100 entries and fails closed for larger lists; use a narrowly scoped
-installation for evaluation.
+From the project page, choose **Install GitHub App** and grant access to that
+project's repository. The platform verifies the installation and then shows
+**Connect GitHub** to authorize the user's account. OAuth verifies that the user
+can access an installation containing the project's repository. This initial
+version supports installation/repository lists of up to 100 entries and fails
+closed for larger lists; use a narrowly scoped installation for evaluation.
 
 ## Linear
 
@@ -68,6 +74,7 @@ Do not copy provider tokens into the cloud server or into project instructions.
 ## Sources
 
 - [GitHub App installation tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
+- [GitHub App setup URLs](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-setup-url)
 - [Linear OAuth](https://linear.app/developers/oauth-2-0-authentication)
 - [Linear webhooks](https://linear.app/developers/webhooks)
 - [Slack OAuth](https://docs.slack.dev/authentication/installing-with-oauth/)
