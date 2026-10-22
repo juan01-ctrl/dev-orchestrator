@@ -458,7 +458,13 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 <label for="project-model">Model override</label>
                 <select id="project-model" name="model">
                   <option value="">Automatic</option>
-                  <option :for={model <- DevOrchestrator.ExecutionPolicy.supported_models()} value={model} selected={@selected.data["model"] == model}>{model}</option>
+                  <option
+                    :for={model <- DevOrchestrator.ExecutionPolicy.supported_models()}
+                    value={model}
+                    selected={@selected.data["model"] == model}
+                  >
+                    {model}
+                  </option>
                 </select>
                 <.field
                   name="linear_team"
@@ -553,7 +559,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   </button>
                 </form>
                 <span
-                  :if={provider == "github" and @scope.role == "owner" and @github_status == :connected}
+                  :if={
+                    provider == "github" and @scope.role == "owner" and @github_status == :connected
+                  }
                   class="badge"
                 >
                   GitHub connected
@@ -577,7 +585,10 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   Workspace owner required
                 </span>
                 <span
-                  :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?(provider)}
+                  :if={
+                    @scope.role == "owner" and
+                      !DevOrchestrator.Connections.OAuth.configured?(provider)
+                  }
                   class="badge"
                 >
                   Server setup required
