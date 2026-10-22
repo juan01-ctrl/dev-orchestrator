@@ -58,7 +58,10 @@
 ## Task 6
 
 - Partial: bounded local execution slots (`DEV_ORCHESTRATOR_SLOTS`, 1–10), independent journal directories per slot, shared repository cache, and shared cancellation are implemented in commit `0c3c73d` (`feat(executors): add parallel local execution slots`).
-- Existing durable event journaling and lease renewal remain per run; same-thread resume, interactive clarification, and automatic stale-lock recovery are not yet implemented.
+- Added same-thread recovery: the connector journals the Codex thread ID, workspace, and baseline; the server renews only a live, generation-fenced lease; restart resumes the existing app-server thread and retained worktree instead of claiming/re-running a new task. Resume events avoid replaying the initial task lifecycle.
+- Added race-guarded lock recovery with PID liveness checks, legacy PID-lock compatibility, lock-file safety checks, and ownership-aware release. Active, malformed, and unsafe locks fail closed; stale locks can recover automatically.
+- Connector verification after recovery/lock changes: `npm run check` passed; `npm test` passed 47/47. Offline platform harness passed 36/36. Full `mise exec -- mix test` remains blocked before ExUnit because Mix.PubSub cannot open a local TCP socket (`:eperm`).
+- Still outstanding: interactive durable clarification and response delivery; full DB-backed server verification and crash-boundary/duplicate-publication scenarios.
 
 ## Task 7
 

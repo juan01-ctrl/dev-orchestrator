@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { API } from "./api.ts";
 import { loadConfig, saveConfig, serverURL } from "./config.ts";
 import { CodexSession } from "./codex.ts";
+import { ConnectorLock } from "./lock.ts";
 import { runPool, slotCapacity } from "./pool.ts";
 
 export async function main(args:string[]):Promise<void> {
@@ -42,12 +43,11 @@ export async function main(args:string[]):Promise<void> {
   if(action!=="run")throw new Error("Unknown command. Use help.");
   const root=join(dirname(file),"runtime");await mkdir(root,{recursive:true,mode:0o700});
   const lock=join(root,"connector.lock");
-  const fd=await open(lock,"wx",0o600).catch(()=>{throw new Error("Connector lock exists. Confirm no connector is running before removing that exact lock file.");});
-  await fd.writeFile(String(process.pid));
+  const ownership=await ConnectorLock.acquire(lock);
   const controller=new AbortController();
   const stop=()=>controller.abort();process.once("SIGINT",stop);process.once("SIGTERM",stop);
   try {const capacity=slotCapacity();console.log(`Connector running with ${capacity} execution slot${capacity===1?"":"s"}. Press Ctrl+C to stop; interrupted work is preserved.`);await runPool(config,root,controller.signal,capacity);}
-  finally {controller.abort();process.off("SIGINT",stop);process.off("SIGTERM",stop);await fd.close();await unlink(lock);}
+  finally {controller.abort();process.off("SIGINT",stop);process.off("SIGTERM",stop);await ownership.release();}
 }
 
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {

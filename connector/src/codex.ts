@@ -42,7 +42,7 @@ export class CodexSession {
   initialize(): Promise<void> { return this.session.initialize(); }
   authenticated(): Promise<boolean> { return this.session.authenticated(); }
 
-  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any): Promise<void> {
+  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; onThreadStarted?: (threadId: string) => Promise<void> } = {}): Promise<void> {
     if (signal?.aborted) throw new Error("Task stopped before lease expiration.");
     if (policy && policy.valid === false) throw new CodexPolicyError("Configured model is not supported by this executor deployment.");
     const selectedModel = typeof policy?.model === "string" ? policy.model : model;
@@ -51,7 +51,11 @@ export class CodexSession {
       authorizeCommand: params => authorizeCommand(workspace, [...allowedHosts], params),
       authorizeFileChange: params => authorizeFileChange(workspace, params)
     });
-    const threadId = await this.session.startThread({ cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model: selectedModel });
+    const threadOptions = { cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model: selectedModel };
+    const threadId = recovery.threadId
+      ? await this.session.resumeThread(recovery.threadId, threadOptions)
+      : await this.session.startThread(threadOptions);
+    await recovery.onThreadStarted?.(threadId);
     const abort = () => this.stop();
     signal?.addEventListener("abort", abort, { once: true });
     let bufferedDelta = "";
@@ -103,7 +107,6 @@ export class CodexSession {
       this.session.off("event", onPublicEvent);
       signal?.removeEventListener("abort", abort);
     }
-    void threadId;
   }
 
   stop(): void { this.session.close(); }

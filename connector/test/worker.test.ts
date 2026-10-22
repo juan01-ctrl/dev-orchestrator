@@ -39,6 +39,20 @@ test("a lease with no pending result is reconciled, never automatically re-execu
   } finally {await rm(root,{recursive:true,force:true});}
 });
 
+test("an active journal with a Codex thread resumes without clearing its worktree state",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"orchestrator-thread-recovery-"));
+  try {
+    const journal=new Journal(root);
+    const state={lease:{id:"run-resume",generation:2,lifecycle:1},sequence:4,thread_id:"thread-codex-1",workspace:"/workspace/run-resume",baseline:"a".repeat(40)};
+    await journal.save(state);
+    let payload:any;
+    const recovered=await recover({post:async(path:string,body:any)=>{assert.equal(path,"/executor/reconcile");payload=body;return {action:"resume",state:"running",expires_in_ms:90_000};}},journal);
+    assert.equal(payload.journal.thread_id,"thread-codex-1");
+    assert.deepEqual(recovered,{...state,lease:{...state.lease,expires_in_ms:90_000}});
+    assert.deepEqual(await journal.load(),{...state,lease:{...state.lease,expires_in_ms:90_000}});
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
 test("the worker bootstraps a repo, runs Codex, publishes a PR and keeps credentials out of the agent",async()=>{
   const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-worker-instructions-")));
   try {

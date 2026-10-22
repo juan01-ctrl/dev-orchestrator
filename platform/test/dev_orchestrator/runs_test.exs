@@ -106,6 +106,39 @@ defmodule DevOrchestrator.RunsTest do
            ] = Runs.events(ctx.scope, run["id"])
   end
 
+  test "reconciles an active Codex thread without converting it into a blocker", ctx do
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Resume", "prompt" => "Continue"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:ok, %{action: "resume", state: "running", expires_in_ms: 90_000}} =
+             Runs.reconcile(ctx.executor, lease, %{
+               "pending_event" => nil,
+               "thread_id" => "codex-thread-123",
+               "workspace" => "/connector/runtime/workspaces/run",
+               "baseline" => String.duplicate("a", 40)
+             })
+  end
+
+  test "does not resume an active run without a valid Codex thread", ctx do
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "No thread", "prompt" => "Continue"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:ok, %{action: "acknowledge", state: "blocked"}} =
+             Runs.reconcile(ctx.executor, lease, %{"pending_event" => nil, "thread_id" => ""})
+  end
+
   test "issues a scoped GitHub credential only for the executor's live project lease", ctx do
     {:ok, _} =
       Runs.create(ctx.scope, ctx.project.id, %{"title" => "Publish", "prompt" => "Make change"})

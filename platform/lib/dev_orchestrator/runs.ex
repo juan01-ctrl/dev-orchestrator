@@ -262,6 +262,14 @@ defmodule DevOrchestrator.Runs do
 
           %{action: "replay", expires_in_ms: 90_000}
 
+        resumable_thread_id?(journal["thread_id"]) ->
+          Store.exec(
+            "UPDATE runs SET state='running',lease_expires_at=now()+interval '90 seconds' WHERE id=$1",
+            [run["id"]]
+          )
+
+          %{action: "resume", state: "running", expires_in_ms: 90_000}
+
         true ->
           finish(run, "blocked", %{
             "summary" =>
@@ -402,6 +410,12 @@ defmodule DevOrchestrator.Runs do
     Store.exec("UPDATE runs SET state='running' WHERE id=$1", [run["id"]])
     %{state: "running"}
   end
+
+  defp resumable_thread_id?(thread_id) when is_binary(thread_id) do
+    byte_size(thread_id) in 1..256 and not String.match?(thread_id, ~r/[\x00-\x1f\x7f]/)
+  end
+
+  defp resumable_thread_id?(_), do: false
 
   defp finish(run, state, result) do
     Store.exec(
