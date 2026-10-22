@@ -68,6 +68,7 @@ process.stdin.on("data",chunk=>{
   while((end=buffer.indexOf("\\n"))>=0){
     const message=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);
     if(message.method==="initialize")respond({id:message.id,result:{}});
+    if(message.method==="permissionProfile/list")respond({id:message.id,result:{data:[{id:"dev-orchestrator"}],nextCursor:null}});
     if(message.method==="account/read")respond({id:message.id,result:{account:{type:"chatgpt"}}});
     if(message.method==="thread/start")respond({id:message.id,result:{thread:{id:"fake-thread"}}});
     if(message.method==="turn/start"){
