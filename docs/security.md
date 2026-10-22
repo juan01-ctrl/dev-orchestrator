@@ -18,14 +18,18 @@ technical feasibility.
   Executor credentials are hashed on the server and stored owner-only on the host.
 - Connector calls are outbound HTTPS, with no redirects or inbound remote shell.
   Loopback HTTP is allowed for development only.
-- Local source, repository and task-root authorization is separate from cloud
-  project binding. Agents work in isolated checkouts, not the source checkout.
+- Cloud project binding and verified GitHub App installation jointly authorize
+  repository access. The connector keeps a managed bare cache and creates an
+  isolated worktree per task; no user-supplied local source path is trusted.
 - Codex receives an environment allowlist and a project-write permission profile;
   Git metadata is writable but global provider configuration is not. The sandbox
   must be enforced by a supported local Codex build. Agent network access is off.
-- Trusted Git publication operates through a temporary bare repository, ignores
-  the task's Git config/hooks and forbids force pushes/merges. The cloud verifies
-  repository/head/base/commit before accepting a PR result.
+- The control plane issues short-lived GitHub App tokens scoped to the exact
+  repository and minimum purpose permissions after validating the live lease.
+  Trusted Git publication uses a temporary owner-only credential helper, ignores
+  task Git hooks/configuration, never force-pushes/merges, and removes the helper
+  in `finally`. The cloud verifies repository/head/base/commit before accepting
+  a PR result. Credentials never enter the journal, Git remotes, events or Codex.
 - Durable fencing and sequence checks reject stale or duplicate run events.
   Executor revocation/cancellation takes effect on the next lease check; it does
   not magically undo an already-started external operation.

@@ -1,6 +1,11 @@
 defmodule DevOrchestrator.Connections.GitHub do
   alias DevOrchestrator.Connections.{HTTP, OAuth}
 
+  @token_permissions %{
+    checkout: %{contents: "read"},
+    publish: %{contents: "write", pull_requests: "write"}
+  }
+
   def installation_url(state) when is_binary(state) do
     slug = OAuth.config("github")[:app_slug]
 
@@ -76,6 +81,39 @@ defmodule DevOrchestrator.Connections.GitHub do
       {:ok, token}
     end
   end
+
+  def installation_token(installation_id, repository, purpose)
+      when is_integer(installation_id) and installation_id > 0 and is_binary(repository) and
+             is_map_key(@token_permissions, purpose) do
+    if DevOrchestrator.Policy.valid_repository?(repository) do
+      with {:ok, jwt} <- jwt(),
+           {:ok, %{"token" => token, "expires_at" => expires_at}}
+           when is_binary(token) and token != "" and is_binary(expires_at) <-
+             api(:post, "/app/installations/#{installation_id}/access_tokens", jwt,
+               json: %{
+                 repositories: [repository],
+                 permissions: Map.fetch!(@token_permissions, purpose)
+               }
+             ) do
+        {:ok, %{token: token, expires_at: expires_at}}
+      else
+        {:error, reason} when reason in [:provider_authentication, :provider_rate_limit] ->
+          {:error, reason}
+
+        {:error, _} ->
+          {:error, :provider_rejected}
+
+        _ ->
+          {:error, :invalid_provider_response}
+      end
+    else
+      {:error, :invalid_repository}
+    end
+  rescue
+    _ -> {:error, :provider_unavailable}
+  end
+
+  def installation_token(_, _, _), do: {:error, :invalid_request}
 
   def api(method, path, token, opts \\ []) do
     HTTP.request(

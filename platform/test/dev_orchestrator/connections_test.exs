@@ -1,9 +1,12 @@
 defmodule DevOrchestrator.ConnectionsTest do
   use DevOrchestrator.DataCase
+  import Phoenix.ConnTest
+  @endpoint DevOrchestratorWeb.Endpoint
   alias DevOrchestrator.Connections
 
   setup do
     old_github = Application.get_env(:dev_orchestrator, :github)
+    old_slack = Application.get_env(:dev_orchestrator, :slack)
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
     key = :public_key.generate_key({:rsa, 2048, 65_537})
     pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, key)])
@@ -46,6 +49,10 @@ defmodule DevOrchestrator.ConnectionsTest do
         do: Application.put_env(:dev_orchestrator, :github, old_github),
         else: Application.delete_env(:dev_orchestrator, :github)
 
+      if old_slack,
+        do: Application.put_env(:dev_orchestrator, :slack, old_slack),
+        else: Application.delete_env(:dev_orchestrator, :slack)
+
       if old_transport,
         do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport),
         else: Application.delete_env(:dev_orchestrator, :provider_transport)
@@ -54,6 +61,98 @@ defmodule DevOrchestrator.ConnectionsTest do
     end)
 
     :ok
+  end
+
+  test "Slack connection returns bot-accessible channels for the project picker" do
+    scope = owner("slack-channels@example.test")
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    Application.put_env(:dev_orchestrator, :slack,
+      client_id: "test-slack-client",
+      client_secret: "test-slack-secret"
+    )
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      case opts[:url] do
+        "https://slack.com/api/oauth.v2.access" ->
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "ok" => true,
+               "access_token" => "xoxb-test-token",
+               "team" => %{"id" => "T123", "name" => "Acme"}
+             }
+           }}
+
+        "https://slack.com/api/conversations.list" ->
+          assert {"authorization", "Bearer xoxb-test-token"} in opts[:headers]
+
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "ok" => true,
+               "channels" => [%{"id" => "C123", "name" => "build-reports", "is_member" => true}],
+               "response_metadata" => %{"next_cursor" => ""}
+             }
+           }}
+      end
+    end)
+
+    assert {:ok, authorize_url} = Connections.start_oauth(scope, "slack", project.id, "session")
+    state = URI.decode_query(URI.parse(authorize_url).query)["state"]
+
+    assert {:ok, project_id} =
+             Connections.complete_oauth(scope, "slack", state, "code", "session")
+
+    assert project_id == project.id
+
+    assert {:ok, [%{id: "C123", name: "build-reports"}]} =
+             Connections.slack_channels(scope, project.id)
+  end
+
+  test "Slack OAuth returns to the project that initiated the connection" do
+    scope = owner("slack-callback@example.test")
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    Application.put_env(:dev_orchestrator, :slack,
+      client_id: "test-slack-client",
+      client_secret: "test-slack-secret"
+    )
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      assert opts[:url] == "https://slack.com/api/oauth.v2.access"
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "ok" => true,
+           "access_token" => "xoxb-test-token",
+           "team" => %{"id" => "T123", "name" => "Acme"}
+         }
+       }}
+    end)
+
+    {:ok, session_token} = Accounts.login(scope.email, "a-long-test-password")
+
+    assert {:ok, authorize_url} =
+             Connections.start_oauth(scope, "slack", project.id, session_token)
+
+    state = URI.decode_query(URI.parse(authorize_url).query)["state"]
+
+    conn =
+      build_conn()
+      |> Plug.Test.init_test_session(%{session_token: session_token})
+      |> get("/connections/slack/callback?state=#{URI.encode_www_form(state)}&code=code")
+
+    assert redirected_to(conn) == "/app/projects/" <> project.id
+    assert Phoenix.Controller.get_flash(conn, :info) =~ "Choose a destination channel"
   end
 
   test "unconfigured providers do not authorize or create fake connections" do

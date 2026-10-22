@@ -13,7 +13,7 @@ as a working deployment. Do not expose this evaluation publicly yet.
 ## Start a local evaluation
 
 Requirements: Docker Desktop running, Elixir 1.19/OTP 28 (provided by `mise.toml`),
-Node.js 22.18+, Git, the official Codex CLI and authenticated GitHub CLI.
+Node.js 22.18+, Git and the official Codex CLI signed in to the user's account.
 This application uses port **4100** and a separate PostgreSQL instance on **5433**.
 It does not use or modify an existing Symphony installation or port 4000.
 
@@ -52,16 +52,12 @@ node --experimental-strip-types src/cli.ts pair \
   --config "$HOME/.local/share/dev-orchestrator/connector.json"
 ```
 
-Pairing does not grant project access. An owner must authorize the project in the
-web app, and the local user must separately authorize its repository and roots:
+Pairing does not grant project access. An owner must bind the executor to the
+project and install the configured GitHub App for that project's repository.
+The connector downloads the selected repository itself; no local clone or `allow`
+command is needed:
 
 ```bash
-node --experimental-strip-types src/cli.ts allow \
-  --config "$HOME/.local/share/dev-orchestrator/connector.json" \
-  --project PROJECT_ID --repo owner/repository --base main \
-  --source /absolute/path/to/source-checkout \
-  --workspaces /absolute/path/to/separate/task-workspaces
-
 node --experimental-strip-types src/cli.ts status \
   --config "$HOME/.local/share/dev-orchestrator/connector.json"
 
@@ -69,12 +65,13 @@ node --experimental-strip-types src/cli.ts run \
   --config "$HOME/.local/share/dev-orchestrator/connector.json"
 ```
 
-The source needs the approved GitHub origin, the target branch and a local Git
-author identity. The connector never executes tasks in that source checkout.
-One connector runs one task at a time; multiple connectors allow parallel work
-subject to per-project limits. Its dedicated Codex subprocess does not attach to
-desktop chats. Host-side `gh` publishes committed branches without running the
-task checkout's Git hooks/configuration. GitHub App access lets the cloud verify PRs.
+The connector keeps a bare repository cache and creates an isolated task worktree
+inside its managed data directory. It requests short-lived, repository-scoped
+GitHub App credentials for checkout and publication; credentials stay out of
+Codex, the connector journal and Git remotes. No local `gh` authentication or Git
+author setup is required. One connector runs one task at a time; multiple
+connectors allow parallel work subject to per-project limits. Its dedicated Codex
+subprocess does not attach to desktop chats.
 
 ## Verification
 

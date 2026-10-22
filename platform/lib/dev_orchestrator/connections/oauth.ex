@@ -26,9 +26,14 @@ defmodule DevOrchestrator.Connections.OAuth do
   def authorize_url(provider, state) do
     {url, scope} =
       case provider do
-        "slack" -> {"https://slack.com/oauth/v2/authorize", "chat:write"}
-        "linear" -> {"https://linear.app/oauth/authorize", "read,write"}
-        "github" -> {"https://github.com/login/oauth/authorize", ""}
+        "slack" ->
+          {"https://slack.com/oauth/v2/authorize", "chat:write,channels:read,groups:read"}
+
+        "linear" ->
+          {"https://linear.app/oauth/authorize", "read,write"}
+
+        "github" ->
+          {"https://github.com/login/oauth/authorize", ""}
       end
 
     url <>

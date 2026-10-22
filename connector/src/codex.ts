@@ -2,6 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { stopProcess } from "./process.ts";
+import { activityForNotification, type ActivityStage } from "./activity.ts";
 
 type Pending={resolve:(value:any)=>void;reject:(reason:Error)=>void;timer:NodeJS.Timeout};
 
@@ -49,7 +50,7 @@ export class CodexSession {
     return result.account?.type==="chatgpt";
   }
 
-  async run(workspace:string,prompt:string,model:string|undefined,signal?:AbortSignal):Promise<void> {
+  async run(workspace:string,prompt:string,model:string|undefined,signal?:AbortSignal,onProgress?:(stage:ActivityStage)=>Promise<void>):Promise<void> {
     const thread=await this.request("thread/start",{cwd:workspace,approvalPolicy:"never",permissions:"dev-orchestrator",...(model?{model}:{})});
     const threadId=thread.thread?.id;
     if(!threadId)throw new Error("Codex returned no task thread.");
@@ -57,8 +58,22 @@ export class CodexSession {
     let onFailure:(error:Error)=>void;
     let abort:()=>void;
     let outcome:string|undefined;
+    let lastStage:ActivityStage|undefined;
+    let progressQueue=Promise.resolve();
+    let progressFailure:Error|undefined;
     const completed=new Promise<void>((resolve,reject)=>{
       onNotification=(message)=>{
+        if(message.params?.threadId===threadId) {
+          const stage=activityForNotification(message);
+          if(stage && stage!==lastStage) {
+            lastStage=stage;
+            progressQueue=progressQueue.then(()=>onProgress?.(stage));
+            void progressQueue.catch(error=>{
+              progressFailure=error instanceof Error?error:new Error("Progress delivery failed.");
+              this.fail(progressFailure);
+            });
+          }
+        }
         if(message.method==="item/completed" && message.params?.threadId===threadId && message.params.item?.type==="agentMessage") {
           try {const result=JSON.parse(message.params.item.text);if(["completed","blocked"].includes(result?.outcome))outcome=result.outcome;}catch{/* Wait for a valid structured final answer. */}
         }
@@ -80,6 +95,8 @@ export class CodexSession {
     try {
       await this.request("turn/start",{threadId,cwd:workspace,approvalPolicy:"never",permissions:"dev-orchestrator",input:[{type:"text",text:prompt}],outputSchema:{type:"object",properties:{outcome:{type:"string",enum:["completed","blocked"]}},required:["outcome"],additionalProperties:false}});
       await completed;
+      await progressQueue;
+      if(progressFailure)throw progressFailure;
     } finally {
       this.events.off("notification",onNotification!);this.events.off("failure",onFailure!);
       signal?.removeEventListener("abort",abort!);

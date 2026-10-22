@@ -5,6 +5,8 @@ defmodule DevOrchestrator.ProviderTest do
   setup do
     old = Application.get_env(:dev_orchestrator, :provider_transport)
     old_github = Application.get_env(:dev_orchestrator, :github)
+    old_slack = Application.get_env(:dev_orchestrator, :slack)
+    old_public_url = Application.get_env(:dev_orchestrator, :public_url)
 
     key = :public_key.generate_key({:rsa, 2048, 65_537})
     pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, key)])
@@ -20,6 +22,8 @@ defmodule DevOrchestrator.ProviderTest do
       app_slug: "test-app"
     )
 
+    Application.put_env(:dev_orchestrator, :public_url, "http://localhost:4100")
+
     on_exit(fn ->
       if old,
         do: Application.put_env(:dev_orchestrator, :provider_transport, old),
@@ -29,10 +33,75 @@ defmodule DevOrchestrator.ProviderTest do
         do: Application.put_env(:dev_orchestrator, :github, old_github),
         else: Application.delete_env(:dev_orchestrator, :github)
 
+      if old_slack,
+        do: Application.put_env(:dev_orchestrator, :slack, old_slack),
+        else: Application.delete_env(:dev_orchestrator, :slack)
+
+      if old_public_url,
+        do: Application.put_env(:dev_orchestrator, :public_url, old_public_url),
+        else: Application.delete_env(:dev_orchestrator, :public_url)
+
       File.rm(key_path)
     end)
 
     :ok
+  end
+
+  test "Slack authorization requests channel listing and message scopes" do
+    Application.put_env(:dev_orchestrator, :slack, client_id: "test-client")
+
+    url = OAuth.authorize_url("slack", "opaque-state")
+    query = URI.decode_query(URI.parse(url).query)
+
+    assert query["scope"] == "chat:write,channels:read,groups:read"
+  end
+
+  test "Slack channel picker lists only bot-accessible channels across pages" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      assert opts[:url] == "https://slack.com/api/conversations.list"
+      assert {"authorization", "Bearer test-only-token"} in opts[:headers]
+      assert opts[:params][:types] == "public_channel,private_channel"
+      assert opts[:params][:exclude_archived] == "true"
+      assert opts[:params][:limit] == 200
+
+      case opts[:params][:cursor] do
+        nil ->
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "ok" => true,
+               "channels" => [
+                 %{"id" => "C123", "name" => "general", "is_member" => true},
+                 %{"id" => "C456", "name" => "not-joined", "is_member" => false}
+               ],
+               "response_metadata" => %{"next_cursor" => "next-page"}
+             }
+           }}
+
+        "next-page" ->
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "ok" => true,
+               "channels" => [%{"id" => "G789", "name" => "private", "is_member" => true}],
+               "response_metadata" => %{"next_cursor" => ""}
+             }
+           }}
+      end
+    end)
+
+    assert {:ok, [%{id: "C123", name: "general"}, %{id: "G789", name: "private"}]} =
+             Slack.channels("test-only-token")
+  end
+
+  test "Slack channel picker identifies a connection missing read scopes" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn _opts ->
+      {:ok, %{status: 200, body: %{"ok" => false, "error" => "missing_scope"}}}
+    end)
+
+    assert {:error, :missing_scope} = Slack.channels("test-only-token")
   end
 
   test "ambiguous Slack transport failure is not eligible for blind retry" do
@@ -150,5 +219,44 @@ defmodule DevOrchestrator.ProviderTest do
     end)
 
     assert {:error, :installation_required} = GitHub.verify_installation("42", "acme/app")
+  end
+
+  test "mints checkout installation tokens for exactly one repository with read-only contents" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      assert opts[:url] == "https://api.github.com/app/installations/42/access_tokens"
+      assert opts[:method] == :post
+      assert opts[:json] == %{
+               repositories: ["acme/app"],
+               permissions: %{contents: "read"}
+             }
+
+      {:ok,
+       %{status: 201, body: %{"token" => "ephemeral-checkout-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+    end)
+
+    assert {:ok, %{token: "ephemeral-checkout-token", expires_at: "2099-01-01T00:00:00Z"}} =
+             GitHub.installation_token(42, "acme/app", :checkout)
+  end
+
+  test "mints publish installation tokens with only contents and pull request write access" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      assert opts[:json] == %{
+               repositories: ["acme/app"],
+               permissions: %{contents: "write", pull_requests: "write"}
+             }
+
+      {:ok, %{status: 201, body: %{"token" => "ephemeral-publish-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+    end)
+
+    assert {:ok, %{token: "ephemeral-publish-token"}} =
+             GitHub.installation_token(42, "acme/app", :publish)
+  end
+
+  test "installation token errors do not expose provider bodies or credentials" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn _ ->
+      {:ok, %{status: 422, body: %{"message" => "do-not-return-this"}}}
+    end)
+
+    assert {:error, :provider_rejected} = GitHub.installation_token(42, "acme/app", :checkout)
   end
 end

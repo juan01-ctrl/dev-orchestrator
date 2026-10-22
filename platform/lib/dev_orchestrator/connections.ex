@@ -1,6 +1,6 @@
 defmodule DevOrchestrator.Connections do
   alias DevOrchestrator.{Accounts, Store, Projects}
-  alias DevOrchestrator.Connections.{OAuth, SecretBox, GitHub}
+  alias DevOrchestrator.Connections.{OAuth, SecretBox, GitHub, Slack}
 
   def list(scope) do
     Store.rows(
@@ -193,7 +193,7 @@ defmodule DevOrchestrator.Connections do
           id
         ])
 
-        id
+        project_id
       end)
     end
   end
@@ -216,6 +216,20 @@ defmodule DevOrchestrator.Connections do
       "SELECT c.* FROM connections c JOIN connection_grants g ON g.connection_id=c.id AND g.organization_id=c.organization_id WHERE g.project_id=$1 AND g.organization_id=$2 AND c.provider=$3 AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1",
       [project_id, organization_id, provider]
     )
+  end
+
+  def slack_channels(scope, project_id) do
+    with {:ok, _project} <- Projects.get_project(scope, project_id),
+         connection when is_map(connection) <-
+           for_project(scope.organization_id, project_id, "slack"),
+         {:ok, token} <- credential(connection),
+         {:ok, channels} <- Slack.channels(token) do
+      {:ok, channels}
+    else
+      nil -> {:error, :not_connected}
+      {:error, _} = error -> error
+      _ -> {:error, :not_connected}
+    end
   end
 
   def credential(row) do

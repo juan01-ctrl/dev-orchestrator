@@ -11,18 +11,29 @@ HTTPS is required outside loopback development. Redirects are not followed.
 | `/executor/heartbeat` | protocol version, account-health boolean, platform | `data.status` |
 | `/executor/claim` | empty object | `data` is a lease or null |
 | `/executor/renew` | lease identity | `data.expires_in_ms` |
+| `/executor/github-token` | `lease`, `purpose` (`checkout` or `publish`) | short-lived repository-scoped GitHub App token and app author identity |
 | `/executor/events` | `lease`, sequenced `event` | `data.state` or `data: "duplicate"` |
 | `/executor/reconcile` | `lease`, journal summary with optional pending event | `data.action` |
 
 A lease contains `id`, `project_id`, `generation`, `lifecycle`, `sequence`,
 `expires_in_ms` (90,000), task title/prompt and immutable project `snapshot`.
 The snapshot includes the project's saved `instructions` text. The connector
-uses that value in the isolated task checkout; it does not fetch mutable project
-rules while a task is running. Existing projects with empty instructions remain
-compatible, and subsequent runs receive a replacement only after the owner saves
-it. The app accepts a non-empty UTF-8 Markdown `instructions.md` file up to
-32,000 bytes when creating or updating project guidance.
+places that value in a private, task-specific ignored file inside the isolated
+worktree so Codex can read it within the project sandbox; it does not fetch
+mutable project rules while a task is running. Existing projects with empty
+instructions remain compatible, and subsequent runs receive a replacement only
+after the owner saves it. The app accepts a non-empty UTF-8 Markdown
+`instructions.md` file up to 32,000 bytes when creating or updating project
+guidance.
 The snapshot never contains credentials or a server-selected executable path.
+
+GitHub credentials are requested separately and never included in a lease. The
+server verifies the live lease, executor binding, immutable repository snapshot,
+current project repository and verified installation before issuing a token. A
+checkout token is limited to repository contents read; a publish token is limited
+to contents write and pull requests write. The connector keeps each token in
+memory and supplies it only to trusted Git/API operations outside Codex. Tokens
+are never journaled, emitted as events, placed in a remote URL or passed to Codex.
 
 Events are `started`, `progress`, `failure`, `blocked`, `candidate`, `no_changes`.
 An event has a strictly sequential integer and a bounded data object. Persist the

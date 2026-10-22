@@ -20,6 +20,82 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(build_conn(), "/app")
   end
 
+  test "run details show safe execution activity and identify the current stage" do
+    scope = owner("activity@example.test")
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "Activity", "repository" => "acme/activity"})
+
+    {:ok, run} =
+      DevOrchestrator.Runs.create(scope, project.id, %{
+        "title" => "Add a file",
+        "prompt" => "Create it"
+      })
+
+    {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
+
+    {:ok, %{token: token}} =
+      DevOrchestrator.Executors.enroll(code, %{"name" => "Activity runner"})
+
+    {:ok, executor} = DevOrchestrator.Executors.authenticate(token)
+    :ok = DevOrchestrator.Executors.bind(scope, executor["id"], project.id)
+    {:ok, lease} = DevOrchestrator.Runs.claim(executor)
+
+    {:ok, _} =
+      DevOrchestrator.Runs.append_event(executor, lease, %{
+        "sequence" => 1,
+        "kind" => "started",
+        "data" => %{}
+      })
+
+    {:ok, _} =
+      DevOrchestrator.Runs.append_event(executor, lease, %{
+        "sequence" => 2,
+        "kind" => "progress",
+        "data" => %{"stage" => "editing", "message" => "private command output"}
+      })
+
+    {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
+    {:ok, view, html} = live(conn, "/app/runs/" <> run["id"])
+
+    assert html =~ "What’s happening"
+    assert html =~ "Project files are being updated"
+    assert html =~ "The agent reported a file change in the task workspace."
+    assert html =~ "aria-current=\"step\""
+    refute render(view) =~ "private command output"
+  end
+
+  test "repository access blockers point to the project setup action without exposing provider details" do
+    scope = owner("repository-blocker@example.test")
+    {:ok, project} = Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+    {:ok, run} = DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Edit"})
+    {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
+    {:ok, %{token: executor_token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+    {:ok, executor} = DevOrchestrator.Executors.authenticate(executor_token)
+    :ok = DevOrchestrator.Executors.bind(scope, executor["id"], project.id)
+    {:ok, lease} = DevOrchestrator.Runs.claim(executor)
+
+    {:ok, %{state: "blocked"}} =
+      DevOrchestrator.Runs.append_event(executor, lease, %{
+        "sequence" => 1,
+        "kind" => "blocked",
+        "data" => %{
+          "category" => "github_installation_required",
+          "fingerprint" => String.duplicate("a", 64),
+          "provider_body" => "sensitive provider details"
+        }
+      })
+
+    {:ok, session_token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: session_token})
+    {:ok, view, html} = live(conn, "/app/runs/" <> run["id"])
+
+    assert html =~ "GitHub App access is not set up for this repository"
+    assert render(view) =~ "Install the configured GitHub App for this repository, then retry the task."
+    refute render(view) =~ "sensitive provider details"
+  end
+
   test "authenticated UI creates and displays a real project" do
     scope = owner("ui@example.test")
     {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
@@ -81,6 +157,9 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
     {:ok, view, html} = live(conn, "/app/projects/" <> project.id)
     assert html =~ "Saved instructions stay in place unless you upload a replacement."
+    assert html =~ "Slack report channel"
+    assert html =~ "Connect Slack below to choose this project's report channel."
+    refute html =~ "Refresh Slack channels"
 
     upload =
       file_input(view, "#project-rules", :instructions, [

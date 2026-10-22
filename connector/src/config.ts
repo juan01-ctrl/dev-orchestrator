@@ -15,9 +15,15 @@ export async function loadConfig(path: string): Promise<Config> {
   const info = await lstat(path);
   if (!info.isFile() || info.isSymbolicLink() || (info.mode & 0o077) !== 0) throw new Error("Configuration must be a regular owner-only file (chmod 600).");
   const config = JSON.parse(await readFile(path,"utf8"));
-  if (config.version !== 1 || typeof config.token !== "string" || !config.token || !Array.isArray(config.mappings)) throw new Error("Invalid connector configuration.");
-  config.server = serverURL(config.server);
-  return config;
+  if (![1,2].includes(config.version) || typeof config.token !== "string" || !config.token) throw new Error("Invalid connector configuration.");
+  const server = serverURL(config.server);
+  if (config.version === 1) {
+    if (!Array.isArray(config.mappings)) throw new Error("Invalid connector configuration.");
+    console.warn("Legacy connector configuration detected. Local project mappings are ignored; bind projects in the web app.");
+  } else if ("mappings" in config) {
+    throw new Error("Invalid connector configuration.");
+  }
+  return {version:2,server,token:config.token,...(typeof config.codexBinary === "string"?{codexBinary:config.codexBinary}:{})};
 }
 
 export async function saveConfig(path: string, config: Config, exclusive = false): Promise<void> {

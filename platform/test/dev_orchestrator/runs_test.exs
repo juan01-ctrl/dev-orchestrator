@@ -79,4 +79,108 @@ defmodule DevOrchestrator.RunsTest do
     assert {:error, :stale_lease} = Runs.renew(ctx.executor, lease)
     assert {:ok, nil} = Runs.claim(ctx.executor)
   end
+
+  test "safe progress events are persisted in order while the task remains running", ctx do
+    {:ok, run} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Progress", "prompt" => "Edit a file"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 2,
+               "kind" => "progress",
+               "data" => %{"stage" => "editing", "message" => "private command output"}
+             })
+
+    assert [
+             %{"kind" => "started", "data" => %{}},
+             %{"kind" => "progress", "data" => %{"stage" => "editing"}}
+           ] = Runs.events(ctx.scope, run["id"])
+  end
+
+  test "issues a scoped GitHub credential only for the executor's live project lease", ctx do
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Publish", "prompt" => "Make change"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    Store.exec(
+      "INSERT INTO github_app_installations(organization_id,project_id,repository,installation_id,account) VALUES($1,$2,$3,$4,$5)",
+      [ctx.scope.organization_id, ctx.project.id, "acme/app", 42, "acme"]
+    )
+
+    old_github = Application.get_env(:dev_orchestrator, :github)
+    old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
+    Application.put_env(:dev_orchestrator, :github, app_id: "12345", app_slug: "test-app")
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      assert opts[:url] == "https://api.github.com/app/installations/42/access_tokens"
+      assert opts[:json] == %{
+               repositories: ["acme/app"],
+               permissions: %{contents: "read"}
+             }
+
+      {:ok,
+       %{status: 201, body: %{"token" => "temporary-secret-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+    end)
+
+    on_exit(fn ->
+      if old_github,
+        do: Application.put_env(:dev_orchestrator, :github, old_github),
+        else: Application.delete_env(:dev_orchestrator, :github)
+
+      if old_transport,
+        do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport),
+        else: Application.delete_env(:dev_orchestrator, :provider_transport)
+    end)
+
+    assert {:ok,
+            %{
+              token: "temporary-secret-token",
+              author_name: "test-app[bot]",
+              author_email: "12345+test-app[bot]@users.noreply.github.com"
+            }} = Runs.github_token(ctx.executor, lease, :checkout)
+
+    assert {:ok, run} = Runs.get(ctx.scope, lease["id"])
+    refute Jason.encode!(run) =~ "temporary-secret-token"
+  end
+
+  test "does not issue credentials for an expired or stale lease", ctx do
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Expired", "prompt" => "Run"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    Store.exec("UPDATE runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1", [lease["id"]])
+    assert {:error, :stale_lease} = Runs.github_token(ctx.executor, lease, :checkout)
+
+    Store.exec("UPDATE runs SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1", [lease["id"]])
+    assert {:error, :stale_lease} =
+             Runs.github_token(ctx.executor, Map.put(lease, "generation", -1), :checkout)
+  end
+
+  test "does not issue credentials when the project repository changes after leasing", ctx do
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Changed repo", "prompt" => "Run"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+    {:ok, _} = Projects.update_project(ctx.scope, ctx.project.id, %{"repository" => "acme/other"})
+
+    assert {:error, :repository_changed} = Runs.github_token(ctx.executor, lease, :checkout)
+  end
+
+  test "does not issue credentials without an installation, binding, or live executor", ctx do
+    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Unbound", "prompt" => "Run"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+    assert {:error, :github_installation_required} = Runs.github_token(ctx.executor, lease, :checkout)
+
+    Store.exec("DELETE FROM executor_bindings WHERE executor_id=$1 AND project_id=$2", [ctx.executor["id"], ctx.project.id])
+    assert {:error, :unauthorized} = Runs.github_token(ctx.executor, lease, :checkout)
+
+    Store.exec("INSERT INTO executor_bindings(organization_id,executor_id,project_id) VALUES($1,$2,$3)", [ctx.scope.organization_id, ctx.executor["id"], ctx.project.id])
+    Store.exec("UPDATE executors SET revoked_at=now() WHERE id=$1", [ctx.executor["id"]])
+    assert {:error, :unauthorized} = Runs.github_token(ctx.executor, lease, :checkout)
+  end
 end

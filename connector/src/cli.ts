@@ -1,17 +1,16 @@
 import { hostname } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { realpath, mkdir, open, unlink } from "node:fs/promises";
+import { dirname, join } from "node:path";
+import { mkdir, open, unlink } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { API } from "./api.ts";
 import { loadConfig, saveConfig, serverURL } from "./config.ts";
-import { validateMapping } from "./workspace.ts";
 import { CodexSession } from "./codex.ts";
 import { runLoop } from "./worker.ts";
 
 export async function main(args:string[]):Promise<void> {
   const [action,...rest]=args;
   if(!action || action==="help" || action==="--help") {
-    console.log("Dev Orchestrator connector\n\npair --server URL --code CODE --config /absolute/config.json\nallow --config FILE --project ID --repo owner/repo --source /absolute/repo --workspaces /absolute/isolated-root [--base main]\nstatus --config FILE\nrun --config FILE\n\nThis connector uses your official local Codex login. It never modifies Symphony or global provider/Git configuration.");return;
+    console.log("Dev Orchestrator connector\n\npair --server URL --code CODE --config /absolute/config.json\nstatus --config FILE\nrun --config FILE\n\nProjects and repository access are managed in the web app. This connector uses your official local Codex login and never modifies global provider/Git configuration.");return;
   }
   const opts:Record<string,string>={};
   for(let i=0;i<rest.length;i+=2){if(!/^--[a-z-]+$/.test(rest[i]) || !rest[i+1])throw new Error("Options require --name value pairs.");opts[rest[i].slice(2)]=rest[i+1];}
@@ -26,23 +25,18 @@ export async function main(args:string[]):Promise<void> {
       const server=serverURL(opts.server);
       const result=await new API(server).post("/enroll",{code:opts.code,name:opts.name??hostname()});
       if(typeof result.token!=="string")throw new Error("Invalid enrollment response.");
-      await saveConfig(file,{version:1,server,token:result.token,mappings:[]},true);
-      console.log("Paired. Ask the owner to bind a project, then authorize its repository locally with allow.");
+      await saveConfig(file,{version:2,server,token:result.token},true);
+      console.log("Paired. Ask the owner to bind a project and install its repository in the web app.");
     } finally {await reservation.close();await unlink(file+".pairing");}
     return;
   }
   const config=await loadConfig(file);
   if(action==="allow") {
-    if(!opts.workspaces || !opts.source || !opts.project || !opts.repo)throw new Error("Provide --project, --repo, --source and --workspaces.");
-    await mkdir(resolve(opts.workspaces),{recursive:true,mode:0o700});
-    const mapping=await validateMapping({projectId:opts.project,repository:opts.repo,baseBranch:opts.base??"main",source:await realpath(resolve(opts.source)),workspaceRoot:await realpath(resolve(opts.workspaces))});
-    config.mappings=config.mappings.filter(m=>m.projectId!==mapping.projectId).concat(mapping);
-    await saveConfig(file,config);
-    console.log("Project authorized locally. Only this repository, base branch and workspace root can be used.");return;
+    console.log("The local allow command is no longer needed. Bind this executor to the project and configure its GitHub App repository access in the web app.");return;
   }
   if(action==="status") {
     const session=CodexSession.start(config.codexBinary??"codex",dirname(file));
-    try {await session.initialize();console.log(JSON.stringify({codex_authenticated:await session.authenticated(),authorized_projects:config.mappings.length}));}
+    try {await session.initialize();console.log(JSON.stringify({codex_authenticated:await session.authenticated(),server:config.server}));}
     finally{session.stop();}return;
   }
   if(action!=="run")throw new Error("Unknown command. Use help.");

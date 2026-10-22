@@ -1,6 +1,7 @@
 defmodule DevOrchestrator.Runs.Event do
   @moduledoc "Bounded event data; raw provider/tool output is never persisted."
-  @categories ~w(authentication_required local_policy_denied execution_failed publication_failed missing_context interrupted)
+  @categories ~w(authentication_required local_policy_denied execution_failed publication_failed missing_context interrupted github_installation_required github_permission_denied base_branch_missing github_unavailable workspace_setup_failed)
+  @progress_stages ~w(repository_preparing workspace_ready agent_started working editing validating checks_passed publishing pr_verifying)
 
   def sanitize(run, "candidate", data) when is_map(data) do
     allowed = Map.take(data, ~w(repository branch base_branch commit pr_url))
@@ -34,7 +35,10 @@ defmodule DevOrchestrator.Runs.Event do
     {:ok, %{"category" => category, "fingerprint" => fingerprint, "occurrences" => occurrences}}
   end
 
-  def sanitize(_, kind, data) when kind in ~w(started progress no_changes) and is_map(data),
+  def sanitize(_, "progress", %{"stage" => stage}) when stage in @progress_stages,
+    do: {:ok, %{"stage" => stage}}
+
+  def sanitize(_, kind, data) when kind in ~w(started no_changes) and is_map(data),
     do: {:ok, %{}}
 
   def sanitize(_, _, _), do: {:error, :invalid_event}

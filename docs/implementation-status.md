@@ -1,8 +1,54 @@
 # Implementation checkpoint — October 19, 2026
 
+## Automatic repository bootstrap — October 21, 2026
+
+The connector now bootstraps the selected project repository directly from its
+verified GitHub App installation. A local clone, per-project source mapping,
+`gh` login, and manual `allow` command are not prerequisites. New pairing writes
+connector config version 2; version 1 remains readable while its local mappings
+are ignored.
+
+- The server issues lease-bound installation tokens restricted to the exact
+  repository: contents read for checkout, and contents plus pull-request write
+  for publication. Tokens are not persisted in the connector journal, Git
+  remote, event stream, or Codex process environment.
+- The connector keeps a private bare cache and one isolated worktree per task
+  lifecycle beneath the connector config directory. It uses the GitHub App bot
+  identity and opens/verifies the PR through GitHub REST, without `gh`.
+- Acknowledged successful worktrees are eligible for cleanup after 24 hours;
+  terminal failed/blocked worktrees after 7 days. Unfinished work and the shared
+  bare cache are retained. Unsafe or unrecognized worktrees fail closed.
+- Dashboard activity includes repository preparation and PR verification, and
+  maps checkout/setup failures to bounded, actionable messages.
+
+Verification in this environment: connector suite **27 passed** and
+`npm run check` passed. The platform suite could not start: Mix 1.19 fails before
+ExUnit because its local PubSub TCP socket is denied (`:eperm`). No real-provider
+smoke test, real Codex task, GitHub PR creation, deployment, push, or merge was
+performed.
+This is implemented source, not a verified production deployment.
+
 The product has a separate source implementation and local Git repository.
 It is **not yet an integrated, verified deployment** and has not been pushed.
 The existing Symphony installation and its configuration/remote were not changed.
+
+## Parity plan baseline — October 22, 2026
+
+Fresh verification for the premium runtime parity work:
+
+| Check | Result |
+|---|---|
+| `cd connector && npm run check` | Passed |
+| `cd connector && npm test` | 27 passed, 0 failed |
+| `cd platform && mise exec -- elixir test/offline.exs` | 26 passed, 0 failed; emits two compile warnings because the database-backed `Connections` module is intentionally outside this offline harness |
+| `cd platform && mise exec -- mix test` | Blocked before ExUnit: Mix 1.19.5 cannot open its PubSub TCP socket (`:eperm`) in this environment |
+
+The offline harness now loads the GitHub provider and the already-built Jason/Req
+dependencies when available. This corrects the earlier false-negative run where
+eight provider tests failed because the harness omitted GitHub; it does not replace
+the full Mix/PostgreSQL suite. App-server resume, generic Linear webhooks, issue
+reconciliation, PubSub streaming, model/capability policy and executor slot pooling
+remain unimplemented until their plan tasks are completed.
 
 ## Source implemented
 

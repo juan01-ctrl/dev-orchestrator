@@ -13,7 +13,10 @@ defmodule DevOrchestratorWeb.DashboardLive do
        code: nil,
        selected: nil,
        selected_run: nil,
-       instruction_error: nil
+       instruction_error: nil,
+       slack_channels: [],
+       slack_connected: false,
+       slack_channel_message: nil
      )
      |> allow_upload(:instructions,
        accept: ~w(.md),
@@ -23,7 +26,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
   end
 
   def handle_params(params, _, socket),
-    do: {:noreply, socket |> assign(:params, params) |> refresh()}
+    do: {:noreply, socket |> assign(:params, params) |> refresh() |> load_slack_channels()}
 
   def handle_info(:refresh, socket) do
     Process.send_after(self(), :refresh, 5_000)
@@ -86,6 +89,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
 
   defp dispatch("validate_project_upload", _params, socket),
     do: {:noreply, assign(socket, :instruction_error, nil)}
+
+  defp dispatch("refresh_slack_channels", _params, socket),
+    do: {:noreply, load_slack_channels(socket)}
 
   defp dispatch("create_run", params, socket) do
     case Runs.create(socket.assigns.scope, params["project_id"], params) do
@@ -235,6 +241,53 @@ defmodule DevOrchestratorWeb.DashboardLive do
         redirect(socket, to: "/login")
     end
   end
+
+  defp load_slack_channels(
+         %{assigns: %{live_action: :project, selected: %{id: project_id}}} = socket
+       ) do
+    case Connections.slack_channels(socket.assigns.scope, project_id) do
+      {:ok, channels} ->
+        assign(socket,
+          slack_channels: channels,
+          slack_connected: true,
+          slack_channel_message:
+            if(channels == [],
+              do:
+                "No channels available yet. Invite the connected app to a channel, then refresh.",
+              else: nil
+            )
+        )
+
+      {:error, :not_connected} ->
+        assign(socket,
+          slack_channels: [],
+          slack_connected: false,
+          slack_channel_message: "Connect Slack below to choose this project's report channel."
+        )
+
+      {:error, :missing_scope} ->
+        assign(socket,
+          slack_channels: [],
+          slack_connected: true,
+          slack_channel_message: "Reconnect Slack to grant permission to list channel names."
+        )
+
+      _ ->
+        assign(socket,
+          slack_channels: [],
+          slack_connected: true,
+          slack_channel_message: "Slack channels could not be loaded. Try refreshing."
+        )
+    end
+  end
+
+  defp load_slack_channels(socket),
+    do:
+      assign(socket,
+        slack_channels: [],
+        slack_connected: false,
+        slack_channel_message: nil
+      )
 
   def render(assigns) do
     ~H"""
@@ -390,11 +443,41 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   name="review_state"
                   label="Linear review state"
                   value={@selected.data["review_state"]}
-                /><.field
-                  name="slack_channel"
-                  label="Slack channel ID"
-                  value={@selected.data["slack_channel"]}
                 />
+                <label for="slack-channel">Slack report channel</label>
+                <select id="slack-channel" name="slack_channel" disabled={!@slack_connected}>
+                  <option value="">Choose a channel</option>
+                  <option
+                    :if={
+                      @selected.data["slack_channel"] &&
+                        not Enum.any?(@slack_channels, &(&1.id == @selected.data["slack_channel"]))
+                    }
+                    value={@selected.data["slack_channel"]}
+                    selected
+                  >
+                    {if @slack_connected,
+                      do: "Current channel — unavailable to the connected app",
+                      else: "Previously saved channel"}
+                  </option>
+                  <option
+                    :for={channel <- @slack_channels}
+                    value={channel.id}
+                    selected={channel.id == @selected.data["slack_channel"]}
+                  >
+                    #{channel.name}
+                  </option>
+                </select>
+                <p :if={@slack_channel_message} class="fine muted" role="status">
+                  {@slack_channel_message}
+                </p>
+                <button
+                  :if={@slack_connected}
+                  type="button"
+                  class="quiet"
+                  phx-click="refresh_slack_channels"
+                >
+                  Refresh Slack channels
+                </button>
                 <button>Save project rules</button>
               </form>
             </section>
@@ -434,7 +517,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
                     value={Plug.CSRFProtection.get_csrf_token()}
                   /><input type="hidden" name="project_id" value={@selected.id} />
                   <button class="secondary">
-                    Connect {provider_name(provider)}
+                    {if provider == "slack" and @slack_connected,
+                      do: "Reconnect Slack",
+                      else: "Connect #{provider_name(provider)}"}
                   </button>
                 </form>
                 <span
@@ -442,6 +527,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   class="badge"
                 >
                   GitHub connected
+                </span>
+                <span :if={provider == "slack" and @slack_connected} class="badge">
+                  Slack connected
                 </span>
                 <button
                   :if={
@@ -487,7 +575,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 After configuring a provider app and its callback URLs, restart the server to enable its setup actions.
               </p>
               <p class="fine muted">
-                Codex authenticates on the executor, not here. Invite your Slack bot to the selected channel.
+                Invite the connected Slack app to the channel you want to use. Only channels where it can post are listed.
               </p>
             </section>
           </div>
@@ -615,11 +703,40 @@ defmodule DevOrchestratorWeb.DashboardLive do
               Review pull request ↗
             </a>
           </section>
-          <ol class="timeline">
-            <li :for={e <- @events}>
-              <span class="mono fine">{Calendar.strftime(e["created_at"], "%H:%M:%S")}</span><strong>{humanize(e["kind"])}</strong><span class="muted">{e["data"]["category"]}</span>
-            </li>
-          </ol>
+          <section class="activity-panel" aria-label="Task activity">
+            <header class="activity-header">
+              <div>
+                <p class="eyebrow">Execution activity</p>
+                <h2>What’s happening</h2>
+              </div>
+              <span class={if(@selected_run["state"] == "running", do: "activity-status is-live", else: "activity-status")} role="status" aria-live="polite">
+                <span class="activity-status-dot" aria-hidden="true"></span>
+                {if @selected_run["state"] == "running", do: "Live", else: "Activity log"}
+              </span>
+            </header>
+            <p class="fine muted activity-note">
+              Updates as work progresses. Private reasoning and raw command output stay hidden.
+            </p>
+            <ol :if={@events != []} class="activity-list" aria-live="polite" aria-relevant="additions text">
+              <li
+                :for={{event, index} <- Enum.with_index(@events)}
+                class={["activity-item", if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "is-current", else: nil)]}
+                aria-current={if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "step", else: nil)}
+              >
+                <span class="activity-marker" aria-hidden="true"></span>
+                <div class="activity-content">
+                  <div class="activity-meta">
+                    <strong>{activity_title(event)}</strong>
+                    <time class="mono fine muted">{Calendar.strftime(event["created_at"], "%H:%M:%S")}</time>
+                  </div>
+                  <p class="fine muted">{activity_description(event)}</p>
+                </div>
+              </li>
+            </ol>
+            <p :if={@events == []} class="activity-empty muted" role="status">
+              Waiting for the local executor to report its first update…
+            </p>
+          </section>
           <section :if={@deliveries != []} class="panel">
             <h2>Report delivery</h2>
             <div :for={d <- @deliveries} class="connection-row">

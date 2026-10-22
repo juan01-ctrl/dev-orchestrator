@@ -1,5 +1,6 @@
 defmodule DevOrchestrator.Runs do
   alias DevOrchestrator.{Store, Projects, Accounts}
+  alias DevOrchestrator.Connections.{GitHub, OAuth}
   alias DevOrchestrator.Runs.FailureBudget
 
   def list(scope),
@@ -100,6 +101,66 @@ defmodule DevOrchestrator.Runs do
 
       %{expires_in_ms: 90_000}
     end)
+  end
+
+  def github_token(executor, lease, purpose) when purpose in [:checkout, :publish] do
+    with {:ok, access} <- Store.transaction(fn -> github_token_access!(executor, lease) end),
+         {:ok, token} <-
+           GitHub.installation_token(access.installation_id, access.repository, purpose),
+         {:ok, _} <- Store.transaction(fn -> github_token_access!(executor, lease, access) end) do
+      config = OAuth.config("github")
+      app_id = config[:app_id]
+      app_slug = config[:app_slug]
+
+      if is_binary(app_id) and is_binary(app_slug) do
+        {:ok,
+         Map.merge(token, %{
+           author_name: app_slug <> "[bot]",
+           author_email: app_id <> "+" <> app_slug <> "[bot]@users.noreply.github.com"
+         })}
+      else
+        {:error, :github_not_configured}
+      end
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :github_installation_required}
+    end
+  end
+
+  def github_token(_, _, _), do: {:error, :invalid_purpose}
+
+  defp github_token_access!(executor, lease) do
+    run = leased_run!(executor, lease)
+    repository = get_in(run, ["snapshot", "repository"])
+
+    project =
+      Store.one(
+        "SELECT repository FROM projects WHERE id=$1 AND organization_id=$2",
+        [run["project_id"], executor["organization_id"]]
+      ) || Store.halt(:github_installation_required)
+
+    if not is_binary(repository) or project["repository"] != repository,
+      do: Store.halt(:repository_changed)
+
+    github_token_access!(executor, lease, repository)
+  end
+
+  defp github_token_access!(executor, lease, %{repository: repository, installation_id: id}) do
+    current = github_token_access!(executor, lease, repository)
+    if current.installation_id != id, do: Store.halt(:github_installation_required)
+    current
+  end
+
+  defp github_token_access!(executor, lease, repository) when is_binary(repository) do
+    run = leased_run!(executor, lease)
+
+    installation =
+      Store.one(
+        "SELECT installation_id FROM github_app_installations WHERE organization_id=$1 AND project_id=$2 AND repository=$3",
+        [executor["organization_id"], run["project_id"], repository]
+      ) || Store.halt(:github_installation_required)
+
+    %{repository: repository, installation_id: installation["installation_id"]}
   end
 
   def append_event(executor, lease, %{"sequence" => sequence, "kind" => kind} = event)

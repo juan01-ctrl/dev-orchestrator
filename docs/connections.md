@@ -13,10 +13,11 @@ repository-access changes are rechecked. Do not select **Request user authorizat
 (OAuth) during installation**; that option prevents GitHub from using a Setup URL.
 The setup callback and OAuth callback are separate steps. Install the app only on
 approved repositories.
-Grant repository metadata read and pull requests read permissions for verification.
-The customer host's separate GitHub CLI credentials perform publication; the cloud
-does not receive those credentials. The app's private key is used only by the cloud
-to mint short-lived installation tokens.
+Grant repository contents read/write and pull requests read/write permissions.
+The executor requests short-lived installation tokens for the exact configured
+repository: checkout tokens receive contents read; publication tokens receive
+contents write and pull requests write. The app's private key stays on the cloud
+and is used only to mint those scoped tokens.
 
 Set `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_SLUG`
 and `GITHUB_PRIVATE_KEY_PATH`. Mount that private key read-only into the container
@@ -28,6 +29,8 @@ project's repository. The platform verifies the installation and then shows
 can access an installation containing the project's repository. This initial
 version supports installation/repository lists of up to 100 entries and fails
 closed for larger lists; use a narrowly scoped installation for evaluation.
+The executor uses the project's saved repository and base branch to fetch code;
+users do not need to clone the repository or configure local GitHub CLI access.
 
 ## Linear
 
@@ -51,25 +54,33 @@ review state. Failed work remains visible without falsely marking the issue done
 ## Slack
 
 Register an OAuth Slack app with callback `PUBLIC_URL/connections/slack/callback`.
-Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. The only requested bot scope is
-`chat:write`. Socket Mode, interactive approval buttons and history access are not
-needed for this release's outbound final/blocker reports.
+Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. The requested bot scopes are
+`chat:write`, `channels:read` and `groups:read`. Channel scopes are used only to
+show public and private channels the bot has joined; message history is never read.
+Socket Mode, interactive approval buttons and history access are not needed for
+this release's outbound final/blocker reports.
 
-Connect the workspace from a project. Invite the bot to the destination channel
-and save its channel ID (starting with C or G) in project rules. Revoking a local
-connection immediately prevents the platform from using it; revoke the app at
-the provider as well to invalidate the provider-issued authorization itself.
+Connect the workspace from a project, invite the bot to the destination channel,
+then choose that channel from the project's report-channel selector and save the
+project rules. Only non-archived channels where the bot is already a member are
+listed. If an existing connection was installed before channel scopes were
+added, reconnect Slack to grant them. Revoking a local connection immediately
+prevents the platform from using it; revoke the app at the provider as well to
+invalidate the provider-issued authorization itself.
 
-## Local Codex and GitHub CLI
+## Local Codex and managed Git workspaces
 
 Install/sign in to the official Codex CLI separately using the user's own account.
 `connector status` checks account type but does not upload login files or prove
 that any particular model is entitled. A completed inference turn is the access
 check. Unsupported permission profiles fail rather than switching to full access.
 
-Authenticate `gh` on the customer host and ensure the approved source checkout has
-a local Git author name/email. The connector does not modify global configuration.
-Do not copy provider tokens into the cloud server or into project instructions.
+The local connector uses the customer's official Codex login. Keep the connector's
+managed data directory writable and private; it stores a bare Git object cache,
+task-specific worktrees, and recovery state there. Legacy connector config version
+1 remains readable, but old per-project local mappings are ignored. Re-pairing is
+not required; delete stale `allow` setup only after confirming no old connector is
+running. Do not copy provider tokens into project instructions or connector config.
 
 ## Sources
 

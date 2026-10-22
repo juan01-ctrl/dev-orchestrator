@@ -38,4 +38,30 @@ defmodule DevOrchestrator.EventTest do
     assert {:error, :invalid_event} =
              Event.sanitize(run, "candidate", Map.put(candidate, "branch", "task/another-run"))
   end
+
+  test "progress events keep only an approved stage and reject free-form activity" do
+    assert {:ok, %{"stage" => "editing"}} =
+             Event.sanitize(%{}, "progress", %{
+               "stage" => "editing",
+               "message" => "token-private",
+               "command" => "cat secrets.txt"
+             })
+
+    assert {:error, :invalid_event} =
+             Event.sanitize(%{}, "progress", %{"stage" => "arbitrary user content"})
+  end
+
+  test "repository setup and PR verification milestones are allowlisted without free-form detail" do
+    for stage <- ["repository_preparing", "pr_verifying"] do
+      assert {:ok, %{"stage" => ^stage}} =
+               Event.sanitize(%{}, "progress", %{"stage" => stage, "output" => "private"})
+    end
+
+    for category <- ["github_installation_required", "github_permission_denied", "base_branch_missing", "github_unavailable", "workspace_setup_failed"] do
+      assert {:ok, %{"category" => ^category} = safe} =
+               Event.sanitize(%{}, "blocked", %{"category" => category, "provider_body" => "secret"})
+
+      refute inspect(safe) =~ "secret"
+    end
+  end
 end

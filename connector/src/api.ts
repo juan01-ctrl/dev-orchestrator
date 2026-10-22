@@ -10,7 +10,7 @@ export class API {
   readonly token: string | undefined;
   constructor(origin: string, token?: string) { this.origin=serverURL(origin); this.token=token; }
   async post(path: string, data: unknown): Promise<any> {
-    if (!/^\/[a-z/]+$/.test(path)) throw new Error("Invalid control-plane route.");
+    if (!/^\/[a-z/-]+$/.test(path)) throw new Error("Invalid control-plane route.");
     const response = await fetch(this.origin + "/api/v1" + path, {
       method: "POST", redirect: "error", signal: AbortSignal.timeout(15_000),
       headers: { "content-type":"application/json", ...(this.token ? {authorization:`Bearer ${this.token}`} : {}) },

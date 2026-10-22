@@ -115,7 +115,10 @@ defmodule DevOrchestratorWeb.OAuthController do
 
     {kind, message} =
       case result do
-        {:ok, _} ->
+        {:ok, _project_id} when provider == "slack" ->
+          {:info, "Slack connected. Choose a destination channel for this project."}
+
+        {:ok, _project_id} ->
           {:info, "Account connected to the selected project."}
 
         {:error, :installation_required} ->
@@ -126,7 +129,12 @@ defmodule DevOrchestratorWeb.OAuthController do
           {:error, "Connection failed or expired. Start a new connection from your project."}
       end
 
-    conn |> put_flash(kind, message) |> redirect(to: "/app/connections")
+    conn = put_flash(conn, kind, message)
+
+    case result do
+      {:ok, project_id} -> redirect(conn, to: project_location(project_id))
+      _ -> redirect(conn, to: "/app/connections")
+    end
   end
 
   def callback(conn, _), do: redirect(conn, to: "/app/connections")

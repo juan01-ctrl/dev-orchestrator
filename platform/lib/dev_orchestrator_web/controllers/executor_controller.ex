@@ -22,6 +22,18 @@ defmodule DevOrchestratorWeb.ExecutorController do
   def claim(conn, _), do: authenticated(conn, &Runs.claim/1)
   def renew(conn, params), do: authenticated(conn, &Runs.renew(&1, params))
 
+  def github_token(conn, %{"lease" => lease, "purpose" => purpose}) do
+    authenticated(conn, fn executor ->
+      case purpose do
+        "checkout" -> Runs.github_token(executor, lease, :checkout)
+        "publish" -> Runs.github_token(executor, lease, :publish)
+        _ -> {:error, :invalid_purpose}
+      end
+    end)
+  end
+
+  def github_token(conn, _), do: conn |> put_status(422) |> json(%{error: "invalid_request"})
+
   def event(conn, %{"lease" => lease, "event" => event}),
     do: authenticated(conn, &Runs.append_event(&1, lease, event))
 
