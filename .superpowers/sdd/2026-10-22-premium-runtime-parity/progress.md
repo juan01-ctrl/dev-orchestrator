@@ -49,7 +49,7 @@
 
 ## Task 5
 
-- Status: implementation in progress.
+- Implementation complete in this worktree; full integration and live provider smoke checks remain unverified.
 - Added deployment-owned model catalog, automatic Luna/low vs. Sol/high classification, validated project override, and immutable policy snapshot at lease time.
 - Connector applies the selected model/effort, removes broad credential-path access, and brokers exact-host network amendments and workspace-only permission requests fail-closed.
 - Connector checks/tests: 40 passed; offline platform suite: 34 passed.
