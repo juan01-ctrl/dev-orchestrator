@@ -5,12 +5,12 @@ for app <- ~w(jason req), profile <- ~w(test dev),
     do: Code.append_path(path)
 
 for file <-
-      ~w(policy.ex runtime_config.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex runs/failure_budget.ex runs/event.ex delivery/verification.ex intake/signature.ex intake/inbox.ex) do
+      ~w(policy.ex runtime_config.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex runs/failure_budget.ex runs/event.ex runs/lifecycle.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex) do
   Code.require_file("lib/dev_orchestrator/" <> file)
 end
 
 ExUnit.start()
 
 for name <-
-      ~w(policy runtime_config secret_box failure_budget event verification webhook provider intake),
+      ~w(policy runtime_config secret_box failure_budget event verification webhook provider intake runs_lifecycle),
     do: Code.require_file("test/dev_orchestrator/#{name}_test.exs")

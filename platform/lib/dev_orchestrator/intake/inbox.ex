@@ -88,13 +88,12 @@ defmodule DevOrchestrator.Intake.Inbox do
              "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id}}}",
              %{"id" => row["event"]["issue_id"]}
            ) do
-      projects =
-        Store.rows(
-          "SELECT p.* FROM projects p JOIN connection_grants g ON g.project_id=p.id AND g.organization_id=p.organization_id JOIN connections c ON c.id=g.connection_id AND c.organization_id=p.organization_id WHERE c.provider='linear' AND c.external_id=$1 AND c.revoked_at IS NULL AND p.organization_id=(SELECT organization_id FROM connections WHERE id=c.id) ORDER BY p.created_at",
-          [row["organization_external_id"]]
-        )
+      projects = Store.rows(
+        "SELECT DISTINCT p.* FROM projects p JOIN connection_grants g ON g.project_id=p.id AND g.organization_id=p.organization_id JOIN connections c ON c.id=g.connection_id AND c.organization_id=p.organization_id WHERE c.provider='linear' AND c.external_id=$1 AND c.revoked_at IS NULL ORDER BY p.created_at",
+        [row["organization_external_id"]]
+      )
 
-      Enum.each(projects, &DevOrchestrator.Intake.Linear.accept(&1, issue))
+      Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
       complete(row["id"])
       :processed
     else
