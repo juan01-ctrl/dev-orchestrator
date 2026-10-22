@@ -242,7 +242,10 @@ defmodule DevOrchestrator.Runs do
           if run do
             snapshot =
               Projects.snapshot(%{data: project})
-              |> Map.put("execution_policy", DevOrchestrator.ExecutionPolicy.for_task(project, run))
+              |> Map.put(
+                "execution_policy",
+                DevOrchestrator.ExecutionPolicy.for_task(project, run)
+              )
 
             leased =
               Store.one(
@@ -271,6 +274,7 @@ defmodule DevOrchestrator.Runs do
 
       {:error, _} = error ->
         :telemetry.execute([:dev_orchestrator, :runs, :lease], %{count: 1}, %{outcome: "rejected"})
+
         error
     end
   end
