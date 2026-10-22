@@ -1,4 +1,5 @@
 /.superpowers/
+/.worktrees/
 **/deps/
 **/_build/
 **/node_modules/
