@@ -41,11 +41,12 @@ are stored encrypted and rotated when their access tokens expire.
 
 Connect from the project. Configure its exact Linear team ID, optional project ID
 and review-state name. The initial eligible intake states are `Todo` and `In Progress`.
-Create an Issue create/update webhook pointing to
-`PUBLIC_URL/api/v1/webhooks/linear/CONNECTION_ID` for that authorized connection.
-The connection ID is visible on the connections screen. Use the configured webhook
-signing secret. The payload organization must match the authorized Linear account;
-query parameters cannot override signed webhook data.
+Configure an Issue create/update webhook pointing to
+`PUBLIC_URL/api/v1/webhooks/linear`. This provider-wide endpoint routes the signed
+organization ID to matching connected workspaces and project grants. The service
+verifies the exact raw body and timestamp, persists a minimal event in a durable
+inbox, and acknowledges it before doing Linear API lookups asynchronously. Do not
+put identity or secrets in query parameters.
 
 Only freshly signed events are accepted. A duplicate issue does not start another
 run automatically. Successful verified PRs are attached and moved to the configured

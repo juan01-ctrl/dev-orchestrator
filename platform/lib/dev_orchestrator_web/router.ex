@@ -66,6 +66,7 @@ defmodule DevOrchestratorWeb.Router do
     post("/executor/github-token", ExecutorController, :github_token)
     post("/executor/events", ExecutorController, :event)
     post("/executor/reconcile", ExecutorController, :reconcile)
+    post("/webhooks/linear", WebhookController, :receive_linear)
     post("/webhooks/:provider/:connection_id", WebhookController, :receive_event)
   end
 

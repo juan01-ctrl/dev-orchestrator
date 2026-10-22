@@ -11,6 +11,7 @@ defmodule DevOrchestrator.Background do
   def handle_info(:tick, state) do
     try do
       DevOrchestrator.Runs.expire_leases()
+      DevOrchestrator.Intake.Inbox.process_one()
       DevOrchestrator.Delivery.Worker.tick()
     rescue
       _ -> Logger.warning("Background operation failed; retained durable state for recovery.")
