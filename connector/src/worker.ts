@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { Journal } from "./journal.ts";
 import { API, APIError } from "./api.ts";
-import { CodexSession, RepeatedFailureError, CodexBlockedError } from "./codex.ts";
+import { CodexSession, RepeatedFailureError, CodexBlockedError, CodexPolicyError } from "./codex.ts";
 import { RepositoryWorkspace } from "./repository.ts";
 import { Publisher, type PublicationContext } from "./publisher.ts";
 import type { Config, JournalState } from "./types.ts";
@@ -109,7 +109,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       "Implement this development task end to end in this isolated checkout.",
       "Read and respect the repository's AGENTS.md and project-scoped skills. Do not change global skills or configuration.",
       "Validate changes and create a Conventional Commit on the existing issue branch. Do not push, create a PR, merge, or deploy: the trusted connector handles publication after your turn.",
-      "Do not invent external access or credentials. If essential context is missing, report a real blocker. Network access is disabled in this evaluation sandbox.",
+      "Do not invent external access or credentials. If essential context is missing, report a real blocker. Network access is restricted: only an exact host in the immutable task policy may be enabled for a specific command; all other hosts remain denied.",
       instructionsPath
         ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
         : "Project instructions:\n"+String(snapshot.instructions??""),
@@ -126,7 +126,8 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       typeof snapshot.model==="string"?snapshot.model:undefined,
       controller.signal,
       stage=>writeEvent("progress",{stage}),
-      event=>writeEvent("activity",{event})
+      event=>writeEvent("activity",{event}),
+      snapshot.execution_policy
     );
     await activityWrites;
     session.stop();session=undefined;
@@ -157,6 +158,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     else if(error instanceof Error && /Selected base branch does not resolve to a commit/i.test(error.message))phase="base_branch_missing";
     else if(error instanceof Error && /Repository setup failed|worktree|managed repository cache|Task repository snapshot/i.test(error.message))phase="workspace_setup_failed";
     if(error instanceof CodexBlockedError)phase="missing_context";
+    if(error instanceof CodexPolicyError)phase="local_policy_denied";
     const fingerprint=error instanceof RepeatedFailureError?error.fingerprint:createHash("sha256").update(phase+":"+(error instanceof Error?error.message:"unknown")).digest("hex");
     const kind=["authentication_required","local_policy_denied","github_installation_required","github_permission_denied","base_branch_missing","missing_context","workspace_setup_failed"].includes(phase)?"blocked":"failure";
     const acknowledgement=await emitDurably(api,journal,state,kind,{category:phase,fingerprint,occurrences:error instanceof RepeatedFailureError?3:1});

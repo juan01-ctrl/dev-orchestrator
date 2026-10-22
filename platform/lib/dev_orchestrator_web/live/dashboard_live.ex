@@ -446,11 +446,12 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   type="number"
                   label="Parallel tasks (1–10)"
                   value={@selected.data["concurrency"]}
-                /><.field
-                  name="model"
-                  label="Model override (optional)"
-                  value={@selected.data["model"]}
                 />
+                <label for="project-model">Model override</label>
+                <select id="project-model" name="model">
+                  <option value="">Automatic</option>
+                  <option :for={model <- DevOrchestrator.ExecutionPolicy.supported_models()} value={model} selected={@selected.data["model"] == model}>{model}</option>
+                </select>
                 <.field
                   name="linear_team"
                   label="Linear team ID"

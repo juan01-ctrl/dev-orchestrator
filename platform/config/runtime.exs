@@ -48,6 +48,29 @@ end
 
 config :dev_orchestrator, :mail_from, System.get_env("MAIL_FROM", "orchestrator@localhost")
 
+supported_models =
+  System.get_env("CODEX_SUPPORTED_MODELS", "gpt-6-luna,gpt-6.1-sol")
+  |> String.split(",", trim: true)
+  |> Enum.map(&String.trim/1)
+
+network_hosts =
+  System.get_env("CODEX_NETWORK_ALLOWED_HOSTS", "registry.npmjs.org,hex.pm,repo.hex.pm,pypi.org,files.pythonhosted.org,github.com")
+  |> String.split(",", trim: true)
+  |> Enum.map(&String.trim/1)
+
+routine_model = System.get_env("CODEX_ROUTINE_MODEL", "gpt-6-luna")
+advanced_model = System.get_env("CODEX_ADVANCED_MODEL", "gpt-6.1-sol")
+
+unless routine_model in supported_models and advanced_model in supported_models do
+  raise "CODEX_ROUTINE_MODEL and CODEX_ADVANCED_MODEL must both be in CODEX_SUPPORTED_MODELS"
+end
+
+config :dev_orchestrator, :codex_models,
+  routine: routine_model,
+  advanced: advanced_model,
+  supported: supported_models,
+  network_hosts: network_hosts
+
 unless config_env() == :test do
   for {provider, prefix} <- [{:slack, "SLACK"}, {:linear, "LINEAR"}, {:github, "GITHUB"}] do
     config :dev_orchestrator, provider,

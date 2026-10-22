@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { AppServerSession } from "./app-server/session.ts";
+import { authorizeCommand, authorizeFileChange } from "./app-server/capabilities.ts";
 import type { ActivityStage } from "./activity.ts";
 import type { PublicExecutionEvent } from "./app-server/events.ts";
 
@@ -9,6 +10,7 @@ export class RepeatedFailureError extends Error {
   constructor(fingerprint: string) { super("Codex repeated the same failed command three times."); this.fingerprint = fingerprint; }
 }
 export class CodexBlockedError extends Error {}
+export class CodexPolicyError extends Error {}
 
 export class CodexSession {
   readonly child: ChildProcessWithoutNullStreams;
@@ -40,9 +42,16 @@ export class CodexSession {
   initialize(): Promise<void> { return this.session.initialize(); }
   authenticated(): Promise<boolean> { return this.session.authenticated(); }
 
-  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>): Promise<void> {
+  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any): Promise<void> {
     if (signal?.aborted) throw new Error("Task stopped before lease expiration.");
-    const threadId = await this.session.startThread({ cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model });
+    if (policy && policy.valid === false) throw new CodexPolicyError("Configured model is not supported by this executor deployment.");
+    const selectedModel = typeof policy?.model === "string" ? policy.model : model;
+    const allowedHosts = new Set<string>(Array.isArray(policy?.network?.allowed_hosts) ? policy.network.allowed_hosts.filter((host: unknown): host is string => typeof host === "string").map((host: string) => host.toLowerCase()) : []);
+    this.session.configureRequestHandlers({
+      authorizeCommand: params => authorizeCommand(workspace, [...allowedHosts], params),
+      authorizeFileChange: params => authorizeFileChange(workspace, params)
+    });
+    const threadId = await this.session.startThread({ cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model: selectedModel });
     const abort = () => this.stop();
     signal?.addEventListener("abort", abort, { once: true });
     let bufferedDelta = "";
@@ -76,6 +85,7 @@ export class CodexSession {
     try {
       const completed = this.session.runTurn(prompt, {
         cwd: workspace,
+        effort: typeof policy?.effort === "string" ? policy.effort : undefined,
         outputSchema: { type: "object", properties: { outcome: { type: "string", enum: ["completed", "blocked"] } }, required: ["outcome"], additionalProperties: false },
         onProgress
       });

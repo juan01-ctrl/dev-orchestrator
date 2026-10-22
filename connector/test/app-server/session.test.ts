@@ -15,10 +15,14 @@ function child() {
       if(message.method==='initialize')result={ready:true};
       if(message.method==='permissionProfile/list')result={data:[{id:'dev-orchestrator'}],nextCursor:null};
       if(message.method==='account/read')result={account:{type:'chatgpt'}};
-      if(message.method==='thread/start')result={thread:{id:'thread-session-test'}};
+      if(message.method==='thread/start') {
+        if(message.params.model && message.params.model!=='gpt-6-luna')process.exit(9);
+        result={thread:{id:'thread-session-test'}};
+      }
       if(message.method==='thread/resume')result={thread:{id:message.params.threadId}};
       process.stdout.write(JSON.stringify({id:message.id,result})+'\\n');
       if(message.method==='turn/start') {
+        if(message.params.effort && message.params.effort!=='low')process.exit(10);
         if(message.params.threadId!=='thread-session-test')process.exit(8);
         turn++;
         process.stdout.write(JSON.stringify({method:'item/agentMessage/delta',params:{threadId:'thread-session-test',turnId:'turn-'+turn,itemId:'item-'+turn,delta:'Working on the task.'}})+'\\n');
@@ -36,9 +40,9 @@ test("session initializes once, discovers profiles, starts and resumes a persist
   try {
     await session.initialize();
     assert.equal(await session.authenticated(), true);
-    const threadId = await session.startThread({ cwd: "/tmp/task", permissions: "dev-orchestrator", model: "gpt-luna-6" });
+    const threadId = await session.startThread({ cwd: "/tmp/task", permissions: "dev-orchestrator", model: "gpt-6-luna" });
     assert.equal(threadId, "thread-session-test");
-    assert.equal((await session.runTurn("First turn")).status, "completed");
+    assert.equal((await session.runTurn("First turn", { effort: "low" })).status, "completed");
     assert.equal(await session.resumeThread(threadId, { cwd: "/tmp/task", permissions: "dev-orchestrator" }), threadId);
     assert.equal((await session.runTurn("Second turn")).status, "completed");
     assert.equal(events.filter((event: any) => event.kind === "message_delta").length, 2);

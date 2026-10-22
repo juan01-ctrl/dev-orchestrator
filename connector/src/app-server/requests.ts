@@ -2,7 +2,7 @@ export type ServerRequest = { id: string | number; method: string; params: any }
 export type RequestResolution = { id: string | number; result?: unknown; error?: { code: number; message: string } };
 
 export type RequestHandlers = {
-  authorizeCommand?: (params: any) => boolean | Promise<boolean>;
+  authorizeCommand?: (params: any) => boolean | Record<string, unknown> | Promise<boolean | Record<string, unknown>>;
   authorizeFileChange?: (params: any) => boolean | Promise<boolean>;
   requestUserInput?: (params: any) => unknown | Promise<unknown>;
   requestPermissions?: (params: any) => unknown | Promise<unknown>;
@@ -17,7 +17,10 @@ export async function resolveServerRequest(handlers: RequestHandlers, requests: 
     try {
       switch (request.method) {
         case "item/commandExecution/requestApproval":
-          return { id: request.id, result: { decision: await handlers.authorizeCommand?.(request.params) ? "accept" : "decline" } };
+          {
+            const decision = await handlers.authorizeCommand?.(request.params);
+            return { id: request.id, result: { decision: decision === true ? "accept" : decision || "decline" } };
+          }
         case "item/fileChange/requestApproval":
           return { id: request.id, result: { decision: await handlers.authorizeFileChange?.(request.params) ? "accept" : "decline" } };
         case "item/tool/requestUserInput":

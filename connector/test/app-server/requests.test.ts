@@ -42,3 +42,11 @@ test("unsupported requests fail closed without throwing away the app-server sess
   const [resolution] = await resolveServerRequest({}, [{ id: 8, method: "unknown/request", params: {} }]);
   assert.equal(resolution?.error?.code, -32601);
 });
+
+test("command broker preserves the exact policy amendment response", async () => {
+  const amendment = { host: "registry.npmjs.org", action: "allow" };
+  const [resolution] = await resolveServerRequest({ authorizeCommand: () => ({ applyNetworkPolicyAmendment: { network_policy_amendment: amendment } }) }, [
+    { id: "network-1", method: "item/commandExecution/requestApproval", params: { command: "npm install" } }
+  ]);
+  assert.deepEqual(resolution?.result, { decision: { applyNetworkPolicyAmendment: { network_policy_amendment: amendment } } });
+});

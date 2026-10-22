@@ -85,7 +85,9 @@ defmodule DevOrchestrator.Runs do
           )
 
         if run do
-          snapshot = Projects.snapshot(%{data: project})
+          snapshot =
+            Projects.snapshot(%{data: project})
+            |> Map.put("execution_policy", DevOrchestrator.ExecutionPolicy.for_task(project, run))
 
           Store.one(
             "UPDATE runs SET executor_id=$2,state='leased',generation=generation+1,sequence=0,snapshot=$3,lease_expires_at=now()+interval '90 seconds',updated_at=now() WHERE id=$1 RETURNING *",

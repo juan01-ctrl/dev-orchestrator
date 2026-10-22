@@ -29,10 +29,28 @@
 
 ## Task 2
 
+- Completed in commit `e2924c9` (`feat(linear): add durable generic webhook intake`).
+- Generic webhook verifies and stores minimal normalized event data; GraphQL and project dispatch happen asynchronously, with duplicate delivery protection and bounded retry backoff.
+- Legacy per-connection route remains available with a deprecation warning.
+- Offline protocol suite: 28 tests, 0 failures at Task 2 boundary.
+
+## Task 3
+
+- Completed in commit `e695549` (`feat(linear): reconcile issue lifecycles`).
+- Added per-project issue activation state, terminal-state cancellation, rework activations, and a paginated per-connection `updatedAt` reconciler with resumable cursors.
+- Lifecycle unit tests cover team/project/state eligibility; full database transition tests still require the full Mix/PostgreSQL test environment.
+
+## Task 4
+
+- Completed in commit `a7d0359` (`feat(runs): stream live execution activity`).
+- Connector batches safe agent-message deltas, sends sanitized activity events, and serializes them with progress writes.
+- Server validates/redacts activity events, broadcasts only after commit, and the run LiveView subscribes to authorized run updates instead of polling every five seconds.
+- Task-boundary verification: connector checks/tests passed; offline platform suite passed 31 tests, 0 failures.
+
+## Task 5
+
 - Status: implementation in progress.
-- Added a generic signed endpoint and durable inbox migration; asynchronous Linear lookup is moved out of the request transaction.
-- Offline protocol suite currently passes 28 tests, including minimal event normalization and replay payload rejection.
-
-## Task 0 completion (retained)
-
-Task 0: complete (commits e05569f..eb8ce89, tests: bash -lc 'cd connector && npm run check && npm test && cd ../platform && mise exec -- elixir -pa /Users/juanierace/Documents/Projects/dev-orchestrator/platform/_build/test/lib/jason/ebin -pa /Users/juanierace/Documents/Projects/dev-orchestrator/platform/_build/test/lib/req/ebin test/offline.exs' → 26 tests, 0 failures)
+- Added deployment-owned model catalog, automatic Luna/low vs. Sol/high classification, validated project override, and immutable policy snapshot at lease time.
+- Connector applies the selected model/effort, removes broad credential-path access, and brokers exact-host network amendments and workspace-only permission requests fail-closed.
+- Connector checks/tests: 40 passed; offline platform suite: 34 passed.
+- Network egress is not enabled globally. Only explicit exact-host app-server amendments from the deployment allowlist can be applied; real dependency-install smoke test remains outstanding.

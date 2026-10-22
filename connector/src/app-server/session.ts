@@ -37,7 +37,7 @@ export class AppServerSession extends EventEmitter {
     const env = Object.fromEntries(allowed.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
     const args = ["app-server", "--listen", "stdio://",
       "-c", 'permissions.dev-orchestrator.extends=":workspace"',
-      "-c", 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="write",".agents"="write",".codex"="read",".aws"="read"}}',
+      "-c", 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="write",".agents"="write",".codex"="read"}}',
       "-c", "permissions.dev-orchestrator.network.enabled=false"];
     const session = new AppServerSession(spawn(options.binary, args, { cwd: options.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] }), options.requestHandlers);
     session.defaultModel = options.model;
@@ -52,6 +52,8 @@ export class AppServerSession extends EventEmitter {
     this.client.notify("initialized", {});
     this.initialized = true;
   }
+
+  configureRequestHandlers(handlers: RequestHandlers): void { this.handlers = handlers; }
 
   async authenticated(): Promise<boolean> {
     const result = await this.client.request("account/read", { refreshToken: false });
@@ -82,14 +84,14 @@ export class AppServerSession extends EventEmitter {
     return threadId;
   }
 
-  runTurn(prompt: string, options: { cwd?: string; outputSchema?: unknown; onProgress?: (stage: ActivityStage) => Promise<void> } = {}): Promise<{ status: string; outcome?: string }> {
+  runTurn(prompt: string, options: { cwd?: string; outputSchema?: unknown; effort?: string; onProgress?: (stage: ActivityStage) => Promise<void> } = {}): Promise<{ status: string; outcome?: string }> {
     if (!this.threadId) return Promise.reject(new Error("Start or resume a Codex thread before running a turn."));
     if (this.activeTurn) return Promise.reject(new Error("A Codex turn is already active in this session."));
     this.progress = options.onProgress;
     this.lastStage = undefined;
     const threadId = this.threadId;
     const completed = new Promise<{ status: string; outcome?: string }>((resolve, reject) => { this.activeTurn = { threadId, resolve, reject }; });
-    void this.client.request("turn/start", { threadId, ...(options.cwd ? { cwd: options.cwd } : {}), approvalPolicy: "never", permissions: "dev-orchestrator", input: [{ type: "text", text: prompt }], ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}) }).catch(error => this.activeTurn?.reject(error));
+    void this.client.request("turn/start", { threadId, ...(options.cwd ? { cwd: options.cwd } : {}), approvalPolicy: "never", permissions: "dev-orchestrator", ...(options.effort ? { effort: options.effort } : {}), input: [{ type: "text", text: prompt }], ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}) }).catch(error => this.activeTurn?.reject(error));
     return completed.finally(() => { this.activeTurn = undefined; this.progress = undefined; });
   }
 
