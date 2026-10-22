@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { API } from "./api.ts";
 import { loadConfig, saveConfig, serverURL } from "./config.ts";
 import { CodexSession } from "./codex.ts";
-import { runLoop } from "./worker.ts";
+import { runPool, slotCapacity } from "./pool.ts";
 
 export async function main(args:string[]):Promise<void> {
   const [action,...rest]=args;
@@ -46,7 +46,7 @@ export async function main(args:string[]):Promise<void> {
   await fd.writeFile(String(process.pid));
   const controller=new AbortController();
   const stop=()=>controller.abort();process.once("SIGINT",stop);process.once("SIGTERM",stop);
-  try {console.log("Connector running. Press Ctrl+C to stop; interrupted work is preserved.");await runLoop(config,root,controller.signal);}
+  try {const capacity=slotCapacity();console.log(`Connector running with ${capacity} execution slot${capacity===1?"":"s"}. Press Ctrl+C to stop; interrupted work is preserved.`);await runPool(config,root,controller.signal,capacity);}
   finally {controller.abort();process.off("SIGINT",stop);process.off("SIGTERM",stop);await fd.close();await unlink(lock);}
 }
 

@@ -38,11 +38,11 @@ export async function recover(api:Transport,journal:Journal,repositories?:Reposi
   await journal.clear();
 }
 
-export async function runLoop(config:Config,root:string,signal:AbortSignal):Promise<void> {
+export async function runLoop(config:Config,root:string,signal:AbortSignal,dataRoot=dirname(root)):Promise<void> {
   const api=new API(config.server,config.token);
   const journal=new Journal(root);
   const repositories=new RepositoryWorkspace();
-  await recover(api,journal,repositories,dirname(root));
+  await recover(api,journal,repositories,dataRoot);
   const health=CodexSession.start(config.codexBinary??"codex",root);
   let authenticated=false;
   try {await health.initialize();authenticated=await health.authenticated();}finally{health.stop();}
@@ -50,11 +50,11 @@ export async function runLoop(config:Config,root:string,signal:AbortSignal):Prom
   if(!authenticated)throw new Error("Sign in to the official Codex CLI with your own ChatGPT account before starting this connector.");
   while(!signal.aborted) {
     try {
-      await recover(api,journal,repositories,dirname(root));
+      await recover(api,journal,repositories,dataRoot);
       await api.post("/executor/heartbeat",{protocol:1,codex_authenticated:true,platform:process.platform});
       const claimStarted=performance.now();
       const lease=await api.post("/executor/claim",{});
-      if(lease)await execute(config,api,journal,{lease,sequence:lease.sequence??0},claimStarted,signal,{dataRoot:dirname(root)});
+      if(lease)await execute(config,api,journal,{lease,sequence:lease.sequence??0},claimStarted,signal,{dataRoot});
     } catch(error) {
       if(signal.aborted)break;
       if(error instanceof APIError && error.status===401)throw new Error("Executor access was revoked. Pair again with an authorized owner.");
