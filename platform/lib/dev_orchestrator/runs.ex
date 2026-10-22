@@ -23,9 +23,16 @@ defmodule DevOrchestrator.Runs do
   def events(scope, id),
     do:
       Store.rows(
-        "SELECT kind,data,created_at FROM run_events WHERE run_id=$1 AND organization_id=$2 ORDER BY created_at,sequence",
+        "SELECT kind,data,created_at FROM (SELECT kind,data,created_at,sequence FROM run_events WHERE run_id=$1 AND organization_id=$2 ORDER BY created_at DESC,sequence DESC LIMIT 200) recent ORDER BY created_at,sequence",
         [id, scope.organization_id]
       )
+
+  def subscribe(scope, id) do
+    with {:ok, _run} <- get(scope, id) do
+      Phoenix.PubSub.subscribe(DevOrchestrator.PubSub, "run:" <> id)
+      :ok
+    end
+  end
 
   def create(scope, project_id, attrs) do
     with {:ok, _} <- Projects.get_project(scope, project_id),
@@ -165,8 +172,8 @@ defmodule DevOrchestrator.Runs do
 
   def append_event(executor, lease, %{"sequence" => sequence, "kind" => kind} = event)
       when is_integer(sequence) and sequence > 0 and
-             kind in ~w(started progress failure blocked candidate no_changes) do
-    Store.transaction(fn ->
+      kind in ~w(started progress activity failure blocked candidate no_changes) do
+    result = Store.transaction(fn ->
       live_executor!(executor)
 
       run =
@@ -207,6 +214,14 @@ defmodule DevOrchestrator.Runs do
         transition(run, kind, data)
       end
     end)
+
+    case result do
+      {:ok, :duplicate} -> result
+      {:ok, _} ->
+        Phoenix.PubSub.broadcast(DevOrchestrator.PubSub, "run:" <> lease["id"], {:run_updated, lease["id"]})
+        result
+      _ -> result
+    end
   end
 
   def append_event(_, _, _), do: {:error, :invalid_event}

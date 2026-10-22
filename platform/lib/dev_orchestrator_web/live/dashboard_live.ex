@@ -4,7 +4,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
   import DevOrchestratorWeb.DashboardComponents
 
   def mount(_, session, socket) do
-    if connected?(socket), do: Process.send_after(self(), :refresh, 5_000)
+    if connected?(socket), do: Process.send_after(self(), :refresh, 30_000)
 
     {:ok,
      socket
@@ -16,7 +16,8 @@ defmodule DevOrchestratorWeb.DashboardLive do
        instruction_error: nil,
        slack_channels: [],
        slack_connected: false,
-       slack_channel_message: nil
+       slack_channel_message: nil,
+       subscribed_run_id: nil
      )
      |> allow_upload(:instructions,
        accept: ~w(.md),
@@ -25,12 +26,20 @@ defmodule DevOrchestratorWeb.DashboardLive do
      )}
   end
 
-  def handle_params(params, _, socket),
-    do: {:noreply, socket |> assign(:params, params) |> refresh() |> load_slack_channels()}
+  def handle_params(params, _, socket) do
+    socket = socket |> assign(:params, params) |> refresh() |> load_slack_channels() |> subscribe_to_selected_run()
+    {:noreply, socket}
+  end
 
   def handle_info(:refresh, socket) do
-    Process.send_after(self(), :refresh, 5_000)
+    Process.send_after(self(), :refresh, 30_000)
     {:noreply, refresh(socket)}
+  end
+
+  def handle_info({:run_updated, run_id}, socket) do
+    if get_in(socket.assigns, [:selected_run, "id"]) == run_id,
+      do: {:noreply, refresh(socket)},
+      else: {:noreply, socket}
   end
 
   def handle_event(event, params, socket) do
@@ -240,6 +249,18 @@ defmodule DevOrchestratorWeb.DashboardLive do
       _ ->
         redirect(socket, to: "/login")
     end
+  end
+
+  defp subscribe_to_selected_run(socket) do
+    run_id = get_in(socket.assigns, [:selected_run, "id"])
+    previous_id = socket.assigns[:subscribed_run_id]
+
+    if connected?(socket) and previous_id != run_id do
+      if previous_id, do: Phoenix.PubSub.unsubscribe(DevOrchestrator.PubSub, "run:" <> previous_id)
+      if run_id, do: Runs.subscribe(socket.assigns.scope, run_id)
+    end
+
+    assign(socket, :subscribed_run_id, run_id)
   end
 
   defp load_slack_channels(

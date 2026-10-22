@@ -1,6 +1,7 @@
 defmodule DevOrchestratorWeb.WebhookController do
   use Phoenix.Controller, formats: [:json]
   import Plug.Conn
+  require Logger
   alias DevOrchestrator.{Store, RateLimit}
   alias DevOrchestrator.Intake.{Signature, Linear}
 
@@ -45,6 +46,7 @@ defmodule DevOrchestratorWeb.WebhookController do
   end
 
   def receive_event(conn, %{"provider" => "linear", "connection_id" => id}) do
+    Logger.warning("Deprecated per-connection Linear webhook received; update to the generic endpoint.")
     connection =
       Store.one(
         "SELECT * FROM connections WHERE id=$1 AND provider='linear' AND revoked_at IS NULL",

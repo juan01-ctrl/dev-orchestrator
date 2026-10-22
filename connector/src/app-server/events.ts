@@ -6,19 +6,26 @@ export type PublicExecutionEvent =
   | { kind: "turn_completed"; status: string };
 
 const bounded = (value: unknown, max: number): string | undefined => typeof value === "string" && value.trim() ? value.slice(0, max) : undefined;
+const safeText = (value: unknown, max: number): string | undefined => {
+  const text = bounded(value, max);
+  if (!text) return undefined;
+  return text
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, "[redacted]")
+    .replace(/(?:\/Users\/[^\s"'`]+|\/home\/[^\s"'`]+|[A-Za-z]:\\Users\\[^\s"'`]+)/g, "[local path]");
+};
 
 export function publicEventFromNotification(message: any, threadId: string): PublicExecutionEvent | undefined {
   const params = message?.params;
   if (!params || params.threadId !== threadId) return undefined;
   switch (message.method) {
     case "item/agentMessage/delta": {
-      const text = bounded(params.delta, 1_000);
+      const text = safeText(params.delta, 1_000);
       return text ? { kind: "message_delta", text } : undefined;
     }
     case "turn/plan/updated": {
       if (!Array.isArray(params.plan)) return undefined;
       const steps = params.plan.slice(0, 20).flatMap((entry: any) => {
-        const step = bounded(entry?.step, 160);
+        const step = safeText(entry?.step, 160);
         const status = bounded(entry?.status, 32);
         return step && status ? [{ step, status }] : [];
       });
@@ -30,7 +37,7 @@ export function publicEventFromNotification(message: any, threadId: string): Pub
       return { kind: "usage", inputTokens: total.inputTokens, outputTokens: total.outputTokens };
     }
     case "warning": {
-      const message = bounded(params.message, 300);
+      const message = safeText(params.message, 300);
       return message ? { kind: "warning", message } : undefined;
     }
     case "turn/completed": {

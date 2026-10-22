@@ -66,6 +66,30 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     refute render(view) =~ "private command output"
   end
 
+  test "accepted run events broadcast after persistence to an authorized subscriber" do
+    scope = owner("activity-stream@example.test")
+    {:ok, project} = Projects.create_project(scope, %{"name" => "Stream", "repository" => "acme/stream"})
+    {:ok, run} = DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Work"})
+    {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
+    {:ok, %{token: token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+    {:ok, executor} = DevOrchestrator.Executors.authenticate(token)
+    :ok = DevOrchestrator.Executors.bind(scope, executor["id"], project.id)
+    {:ok, lease} = DevOrchestrator.Runs.claim(executor)
+    assert :ok = DevOrchestrator.Runs.subscribe(scope, run["id"])
+
+    assert {:ok, %{state: "running"}} =
+             DevOrchestrator.Runs.append_event(executor, lease, %{
+               "sequence" => 1,
+               "kind" => "activity",
+               "data" => %{"event" => %{"kind" => "warning", "message" => "Validation needs attention."}}
+             })
+
+    assert_receive {:run_updated, run_id}
+    assert run_id == run["id"]
+    assert [%{"kind" => "activity", "data" => %{"event" => %{"message" => "Validation needs attention."}}}] =
+             DevOrchestrator.Runs.events(scope, run_id)
+  end
+
   test "repository access blockers point to the project setup action without exposing provider details" do
     scope = owner("repository-blocker@example.test")
     {:ok, project} = Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})

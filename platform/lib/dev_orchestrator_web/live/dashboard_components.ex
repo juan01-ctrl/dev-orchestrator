@@ -74,6 +74,10 @@ defmodule DevOrchestratorWeb.DashboardComponents do
   def activity_title(%{"kind" => "started"}), do: "Task assigned to the local executor"
   def activity_title(%{"kind" => "candidate"}), do: "Pull request submitted for verification"
   def activity_title(%{"kind" => "no_changes"}), do: "Task completed without code changes"
+  def activity_title(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "message_delta"}}}), do: "Agent progress update"
+  def activity_title(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "plan"}}}), do: "Implementation plan updated"
+  def activity_title(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "usage"}}}), do: "Execution usage updated"
+  def activity_title(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "warning"}}}), do: "Execution warning"
   def activity_title(%{"kind" => kind, "data" => %{"category" => category}}) when kind in ["failure", "blocked"], do: failure_title(category)
   def activity_title(%{"kind" => "failure"}), do: "Execution could not be completed"
   def activity_title(%{"kind" => "blocked"}), do: "Execution is blocked"
@@ -115,6 +119,11 @@ defmodule DevOrchestratorWeb.DashboardComponents do
 
   def activity_description(%{"kind" => "no_changes"}),
     do: "The task finished without project changes, so no pull request was needed."
+
+  def activity_description(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "message_delta", "text" => text}}}), do: text
+  def activity_description(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "plan", "steps" => steps}}}), do: "The agent has #{length(steps)} tracked plan steps."
+  def activity_description(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "usage", "inputTokens" => input, "outputTokens" => output}}}), do: "Usage so far: #{input} input and #{output} output tokens."
+  def activity_description(%{"kind" => "activity", "data" => %{"event" => %{"kind" => "warning", "message" => message}}}), do: message
 
   def activity_description(%{"kind" => kind, "data" => %{"category" => category}}) when kind in ["failure", "blocked"], do: failure_description(category)
 

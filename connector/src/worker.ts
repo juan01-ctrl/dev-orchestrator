@@ -115,13 +115,20 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         : "Project instructions:\n"+String(snapshot.instructions??""),
       "Task: "+String(state.lease.title??""),String(state.lease.prompt??"")
     ].join("\n\n");
+    let activityWrites = Promise.resolve();
+    const writeEvent = (kind:string,data:Record<string,unknown>) => {
+      activityWrites = activityWrites.then(() => emitDurably(api,journal,state,kind,data));
+      return activityWrites;
+    };
     await session.run(
       workspace.path,
       prompt,
       typeof snapshot.model==="string"?snapshot.model:undefined,
       controller.signal,
-      stage=>emitDurably(api,journal,state,"progress",{stage})
+      stage=>writeEvent("progress",{stage}),
+      event=>writeEvent("activity",{event})
     );
+    await activityWrites;
     session.stop();session=undefined;
     phase="publication_failed";
     await api.post("/executor/renew",state.lease);

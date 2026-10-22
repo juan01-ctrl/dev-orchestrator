@@ -51,6 +51,19 @@ defmodule DevOrchestrator.EventTest do
              Event.sanitize(%{}, "progress", %{"stage" => "arbitrary user content"})
   end
 
+  test "activity timeline events are allowlisted, bounded, and redact local paths and credentials" do
+    {:ok, %{"event" => %{"kind" => "message_delta", "text" => text}}} =
+      Event.sanitize(%{}, "activity", %{"event" => %{"kind" => "message_delta", "text" => "Updated /Users/juan/project and ghp_123456789012345678901234567890"}})
+
+    refute text =~ "/Users/juan"
+    refute text =~ "ghp_"
+    assert text =~ "[local path]"
+    assert text =~ "[redacted]"
+
+    assert {:error, :invalid_event} =
+             Event.sanitize(%{}, "activity", %{"event" => %{"kind" => "command_output", "text" => "private"}})
+  end
+
   test "repository setup and PR verification milestones are allowlisted without free-form detail" do
     for stage <- ["repository_preparing", "pr_verifying"] do
       assert {:ok, %{"stage" => ^stage}} =

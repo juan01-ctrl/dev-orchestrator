@@ -111,9 +111,10 @@ const prompt=message.params.input[0].text;
     assert.equal(result.content,instructions);
     assert.match(result.prompt,/Project instructions: read and follow the file at /);
     assert.equal(result.githubToken,null);
-    assert.deepEqual(events.map(event=>event.kind==="progress"?event.data.stage:event.kind),[
+    assert.deepEqual(events.filter(event=>event.kind!=="activity").map(event=>event.kind==="progress"?event.data.stage:event.kind),[
       "started","repository_preparing","workspace_ready","agent_started","editing","validating","checks_passed","publishing","pr_verifying","candidate"
     ]);
+    assert.ok(events.some(event=>event.kind==="activity"));
     assert.deepEqual(events.at(-1)?.data.repository,"acme/app");
     assert.deepEqual(events.at(-1)?.data.branch,`task/${runId}`);
     assert.deepEqual(events.at(-1)?.data.base_branch,"main");

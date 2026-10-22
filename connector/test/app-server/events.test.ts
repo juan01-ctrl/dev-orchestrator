@@ -31,3 +31,10 @@ test("plan, usage, warning, and turn-completion events are bounded and scoped to
     method: "turn/completed", params: { threadId: "other", turn: { status: "completed" } }
   }, "thread-1"), undefined);
 });
+
+test("public agent updates redact credentials and local filesystem paths", () => {
+  assert.deepEqual(publicEventFromNotification({
+    method: "item/agentMessage/delta",
+    params: { threadId: "thread-1", delta: "Updated /Users/juan/project with ghp_123456789012345678901234567890" }
+  }, "thread-1"), { kind: "message_delta", text: "Updated [local path] with [redacted]" });
+});

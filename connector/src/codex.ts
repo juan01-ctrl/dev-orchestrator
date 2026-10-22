@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { AppServerSession } from "./app-server/session.ts";
 import type { ActivityStage } from "./activity.ts";
+import type { PublicExecutionEvent } from "./app-server/events.ts";
 
 export class RepeatedFailureError extends Error {
   readonly fingerprint: string;
@@ -39,11 +40,39 @@ export class CodexSession {
   initialize(): Promise<void> { return this.session.initialize(); }
   authenticated(): Promise<boolean> { return this.session.authenticated(); }
 
-  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>): Promise<void> {
+  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>): Promise<void> {
     if (signal?.aborted) throw new Error("Task stopped before lease expiration.");
     const threadId = await this.session.startThread({ cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model });
     const abort = () => this.stop();
     signal?.addEventListener("abort", abort, { once: true });
+    let bufferedDelta = "";
+    let deltaTimer: NodeJS.Timeout | undefined;
+    let eventQueue = Promise.resolve();
+    const enqueue = (event: PublicExecutionEvent) => {
+      eventQueue = eventQueue.then(() => onEvent?.(event));
+      void eventQueue.catch(() => {});
+    };
+    const flushDelta = () => {
+      if (deltaTimer) clearTimeout(deltaTimer);
+      deltaTimer = undefined;
+      const text = bufferedDelta;
+      bufferedDelta = "";
+      if (text) enqueue({ kind: "message_delta", text });
+      return eventQueue;
+    };
+    const onPublicEvent = (event: PublicExecutionEvent) => {
+      if (event.kind === "message_delta") {
+        bufferedDelta = (bufferedDelta + event.text).slice(-1_000);
+        if (!deltaTimer) {
+          deltaTimer = setTimeout(() => { void flushDelta().catch(() => {}); }, 700);
+          deltaTimer.unref();
+        }
+      } else {
+        void flushDelta().catch(() => {});
+        enqueue(event);
+      }
+    };
+    this.session.on("event", onPublicEvent);
     try {
       const completed = this.session.runTurn(prompt, {
         cwd: workspace,
@@ -56,8 +85,14 @@ export class CodexSession {
         completed.finally(() => this.session.off("repeatedFailure", listener)).catch(() => {});
       });
       const result = await Promise.race([completed, repeated]);
+      await flushDelta();
+      await eventQueue;
       if (result.outcome === "blocked") throw new CodexBlockedError("Essential context is missing; the task is blocked.");
-    } finally { signal?.removeEventListener("abort", abort); }
+    } finally {
+      if (deltaTimer) clearTimeout(deltaTimer);
+      this.session.off("event", onPublicEvent);
+      signal?.removeEventListener("abort", abort);
+    }
     void threadId;
   }
 

@@ -1,4 +1,5 @@
 defmodule DevOrchestrator.Intake.Reconciler do
+  require Logger
   alias DevOrchestrator.{Store, Connections}
   alias DevOrchestrator.Connections.Linear
 
@@ -6,7 +7,12 @@ defmodule DevOrchestrator.Intake.Reconciler do
 
   def tick_all do
     Store.rows("SELECT id FROM connections WHERE provider='linear' AND revoked_at IS NULL ORDER BY created_at")
-    |> Enum.each(fn %{"id" => id} -> tick(id) end)
+    |> Enum.each(fn %{"id" => id} ->
+      case tick(id) do
+        {:error, _} -> Logger.warning("Linear reconciliation failed for a connected workspace; retrying from its saved cursor.")
+        _ -> :ok
+      end
+    end)
 
     :ok
   end
