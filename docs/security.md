@@ -22,8 +22,10 @@ technical feasibility.
   repository access. The connector keeps a managed bare cache and creates an
   isolated worktree per task; no user-supplied local source path is trusted.
 - Codex receives an environment allowlist and a project-write permission profile;
-  Git metadata is writable but global provider configuration is not. The sandbox
-  must be enforced by a supported local Codex build. Agent network access is off.
+  Git metadata and project-scoped skills are writable, global provider configuration
+  and credential directories are not. Outbound agent network is disabled by default;
+  an exact single-host app-server amendment is accepted only when the host matches
+  the deployment allowlist. Arbitrary hosts and multi-host expansions are denied.
 - The control plane issues short-lived GitHub App tokens scoped to the exact
   repository and minimum purpose permissions after validating the live lease.
   Trusted Git publication uses a temporary owner-only credential helper, ignores
@@ -42,7 +44,9 @@ encryption-key rotation, enterprise SSO and hosted customer execution are not
 implemented. Organization membership is supported, but public team invitation and
 organization-switching UI are intentionally deferred.
 
-The connector currently runs one task at a time. It preserves a PID lock after
+The connector supports 1–10 local task slots via `DEV_ORCHESTRATOR_SLOTS` (default
+1). Each slot has its own journal and task checkout; project concurrency and
+executor binding still cap effective parallelism. It preserves a PID lock after
 an unclean stop; only remove that exact lock after confirming no executor process
 is still using the credential. Do not copy a paired configuration across machines.
 Use distinct executor enrollments for distinct machines.

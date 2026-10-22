@@ -13,7 +13,7 @@ defmodule DevOrchestrator.Background do
     try do
       DevOrchestrator.Runs.expire_leases()
       DevOrchestrator.Intake.Inbox.process_one()
-      DevOrchestrator.Delivery.Worker.tick()
+      DevOrchestrator.Delivery.Worker.drain()
     rescue
       _ -> Logger.warning("Background operation failed; retained durable state for recovery.")
     after

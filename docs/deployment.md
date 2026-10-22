@@ -48,6 +48,11 @@ Do not place the key in the build context.
 `GET /api/v1/health` checks the web process; `/api/v1/ready` also checks database
 access. Provider authorization is a separate check, not implied by readiness.
 
+The connector defaults to one task slot. Set `DEV_ORCHESTRATOR_SLOTS` to an integer
+from 1 to 10 before starting it to enable multiple isolated local runs. Effective
+parallelism is still bounded by project concurrency and executor bindings. Each slot
+uses its own journal and task worktree while sharing the managed repository cache.
+
 ## Backup and recovery
 
 Back up PostgreSQL and the connection-encryption key separately. Restoring only
@@ -58,8 +63,10 @@ is not an automatic feature of this evaluation.
 
 On restart, queued tasks remain queued. Active expired leases wait for executor
 reconciliation; they are not reassigned automatically. Do not delete preserved
-customer workspaces to clear a task. Unknown Slack send outcomes remain ambiguous,
-not silently resent. Inspect the outbox before deciding whether to resend manually.
+customer workspaces to clear a task. Known provider rejections use bounded backoff;
+unknown Slack send outcomes remain ambiguous, not silently resent. Inspect the
+outbox before deciding whether to resend manually. Apply the new outbox migration
+with the normal release migration command before starting updated binaries.
 
 ## Reproducibility and current validation limits
 

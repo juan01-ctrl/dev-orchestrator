@@ -10,6 +10,10 @@ This is a checklist to execute, not a claim that these checks have already passe
 - Exercise login, logout, password reset and the authenticated LiveView routes.
 - Check the UI at 320px, 768px, 1024px and 1440px, including keyboard navigation.
 - Check pairing-code expiry/replay, executor revocation and local root restrictions.
+- Verify model routing and exact-host network amendments with a disposable task;
+  confirm unknown hosts and permission expansions are denied.
+- Set `DEV_ORCHESTRATOR_SLOTS=2`, submit two eligible tasks, and verify isolated
+  worktrees/journals and project concurrency backpressure.
 - Interrupt networking mid-task; confirm preserved files and reconciliation without
   an automatically duplicated task or PR.
 

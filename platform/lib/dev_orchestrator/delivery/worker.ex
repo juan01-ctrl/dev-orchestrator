@@ -1,4 +1,5 @@
 defmodule DevOrchestrator.Delivery.Worker do
+  require Logger
   alias DevOrchestrator.Connections
   alias DevOrchestrator.Connections.{Linear, Slack}
   alias DevOrchestrator.Delivery.Outbox
@@ -7,6 +8,28 @@ defmodule DevOrchestrator.Delivery.Worker do
     case Outbox.claim() do
       {:ok, row} when is_map(row) -> Outbox.delivery_result(row, deliver(row))
       _ -> :ok
+    end
+  end
+
+  def drain(concurrency \\ 4) when is_integer(concurrency) and concurrency in 1..10 do
+    1..concurrency
+    |> Task.async_stream(fn _ -> drain_slot() end, max_concurrency: concurrency, timeout: 120_000)
+    |> Enum.each(fn
+      {:ok, _} -> :ok
+      {:exit, _} -> Logger.warning("Outbox delivery slot failed; pending jobs remain durable for retry.")
+    end)
+  end
+
+  def drain(_), do: {:error, :invalid_concurrency}
+
+  defp drain_slot do
+    case Outbox.claim() do
+      {:ok, row} when is_map(row) ->
+        Outbox.delivery_result(row, deliver(row))
+        drain_slot()
+
+      _ ->
+        :ok
     end
   end
 

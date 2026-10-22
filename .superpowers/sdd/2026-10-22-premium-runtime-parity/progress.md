@@ -54,3 +54,14 @@
 - Connector applies the selected model/effort, removes broad credential-path access, and brokers exact-host network amendments and workspace-only permission requests fail-closed.
 - Connector checks/tests: 40 passed; offline platform suite: 34 passed.
 - Network egress is not enabled globally. Only explicit exact-host app-server amendments from the deployment allowlist can be applied; real dependency-install smoke test remains outstanding.
+
+## Task 6
+
+- Partial: bounded local execution slots (`DEV_ORCHESTRATOR_SLOTS`, 1–10), independent journal directories per slot, shared repository cache, and shared cancellation are implemented in commit `0c3c73d` (`feat(executors): add parallel local execution slots`).
+- Existing durable event journaling and lease renewal remain per run; same-thread resume, interactive clarification, and automatic stale-lock recovery are not yet implemented.
+
+## Task 7
+
+- Partial: final report delivery now drains concurrently with bounded workers; known provider rejections receive durable 5s/30s/120s/600s backoff and then dead-letter. Unknown send outcomes remain `ambiguous` and are not resent automatically.
+- Added migration `20261024000000_harden_outbox_retries.exs` and updated deployment/protocol/security/evaluation docs for model/network policy and connector slot capacity.
+- Offline platform suite: 36 tests, 0 failures. Full delivery/PostgreSQL integration tests are still blocked by the local Mix socket restriction.
