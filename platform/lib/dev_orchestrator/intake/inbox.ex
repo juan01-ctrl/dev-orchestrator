@@ -8,7 +8,8 @@ defmodule DevOrchestrator.Intake.Inbox do
          {:ok, %{"type" => "Issue", "action" => action, "organizationId" => org_id} = body}
          when action in ["create", "update"] and is_binary(org_id) <- Jason.decode(raw_body),
          issue_id when is_binary(issue_id) <- get_in(body, ["data", "id"]),
-         delivery_id when is_binary(delivery_id) and byte_size(delivery_id) in 1..200 <- headers["linear-delivery"] do
+         delivery_id when is_binary(delivery_id) and byte_size(delivery_id) in 1..200 <-
+           headers["linear-delivery"] do
       {:ok, org_id, %{"type" => "Issue", "action" => action, "issue_id" => issue_id}, delivery_id}
     else
       false -> {:error, :payload_too_large}
@@ -52,11 +53,19 @@ defmodule DevOrchestrator.Intake.Inbox do
     end)
   end
 
-  def complete(id), do: Store.exec("UPDATE webhook_inbox SET state='processed',processed_at=now(),claimed_at=NULL,last_error_category=NULL WHERE id=$1", [id])
+  def complete(id),
+    do:
+      Store.exec(
+        "UPDATE webhook_inbox SET state='processed',processed_at=now(),claimed_at=NULL,last_error_category=NULL WHERE id=$1",
+        [id]
+      )
 
   def fail(id, attempts, category) do
     if attempts >= 8 do
-      Store.exec("UPDATE webhook_inbox SET state='failed',claimed_at=NULL,last_error_category=$2 WHERE id=$1", [id, category])
+      Store.exec(
+        "UPDATE webhook_inbox SET state='failed',claimed_at=NULL,last_error_category=$2 WHERE id=$1",
+        [id, category]
+      )
     else
       delay = min(round(:math.pow(2, attempts)), 300)
 
@@ -88,10 +97,11 @@ defmodule DevOrchestrator.Intake.Inbox do
              "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id}}}",
              %{"id" => row["event"]["issue_id"]}
            ) do
-      projects = Store.rows(
-        "SELECT DISTINCT p.* FROM projects p JOIN connection_grants g ON g.project_id=p.id AND g.organization_id=p.organization_id JOIN connections c ON c.id=g.connection_id AND c.organization_id=p.organization_id WHERE c.provider='linear' AND c.external_id=$1 AND c.revoked_at IS NULL ORDER BY p.created_at",
-        [row["organization_external_id"]]
-      )
+      projects =
+        Store.rows(
+          "SELECT DISTINCT p.* FROM projects p JOIN connection_grants g ON g.project_id=p.id AND g.organization_id=p.organization_id JOIN connections c ON c.id=g.connection_id AND c.organization_id=p.organization_id WHERE c.provider='linear' AND c.external_id=$1 AND c.revoked_at IS NULL ORDER BY p.created_at",
+          [row["organization_external_id"]]
+        )
 
       Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
       complete(row["id"])

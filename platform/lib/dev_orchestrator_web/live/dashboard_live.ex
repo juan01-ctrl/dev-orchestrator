@@ -27,7 +27,13 @@ defmodule DevOrchestratorWeb.DashboardLive do
   end
 
   def handle_params(params, _, socket) do
-    socket = socket |> assign(:params, params) |> refresh() |> load_slack_channels() |> subscribe_to_selected_run()
+    socket =
+      socket
+      |> assign(:params, params)
+      |> refresh()
+      |> load_slack_channels()
+      |> subscribe_to_selected_run()
+
     {:noreply, socket}
   end
 
@@ -256,7 +262,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
     previous_id = socket.assigns[:subscribed_run_id]
 
     if connected?(socket) and previous_id != run_id do
-      if previous_id, do: Phoenix.PubSub.unsubscribe(DevOrchestrator.PubSub, "run:" <> previous_id)
+      if previous_id,
+        do: Phoenix.PubSub.unsubscribe(DevOrchestrator.PubSub, "run:" <> previous_id)
+
       if run_id, do: Runs.subscribe(socket.assigns.scope, run_id)
     end
 
@@ -373,7 +381,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
             </div>
             <section class="panel">
               <h2>New project</h2>
-              <form phx-change="validate_project_upload" phx-submit="create_project">
+              <form id="new-project" phx-change="validate_project_upload" phx-submit="create_project">
                 <.field name="name" label="Project name" required /><.field
                   name="repository"
                   label="GitHub repository"

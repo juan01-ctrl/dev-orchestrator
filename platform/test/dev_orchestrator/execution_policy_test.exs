@@ -3,7 +3,12 @@ defmodule DevOrchestrator.ExecutionPolicyTest do
   alias DevOrchestrator.ExecutionPolicy
 
   test "routine tasks use the low-cost model and narrow project capabilities" do
-    policy = ExecutionPolicy.for_task(%{"model" => nil}, %{"title" => "Add a text file", "prompt" => "Write a short message"})
+    policy =
+      ExecutionPolicy.for_task(%{"model" => nil}, %{
+        "title" => "Add a text file",
+        "prompt" => "Write a short message"
+      })
+
     assert policy["classification"] == "routine"
     assert policy["model"] == "gpt-6-luna"
     assert policy["effort"] == "low"
@@ -24,7 +29,10 @@ defmodule DevOrchestrator.ExecutionPolicyTest do
   test "unsupported deployment models are rejected instead of silently substituted" do
     refute ExecutionPolicy.valid_override?("gpt-not-deployed")
     assert ExecutionPolicy.valid_override?("gpt-6-luna")
-    policy = ExecutionPolicy.for_task(%{"model" => "gpt-not-deployed"}, %{"title" => "Small task"})
+
+    policy =
+      ExecutionPolicy.for_task(%{"model" => "gpt-not-deployed"}, %{"title" => "Small task"})
+
     assert policy["valid"] == false
     assert policy["model"] == nil
     assert policy["error"] == "unsupported_model"

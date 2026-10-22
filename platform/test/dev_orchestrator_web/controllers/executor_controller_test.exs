@@ -8,7 +8,10 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
 
   setup do
     scope = owner("executor-token@example.test")
-    {:ok, project} = Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
     {:ok, enrollment} = Executors.create_enrollment(scope)
     {:ok, %{token: token}} = Executors.enroll(enrollment, %{"name" => "Runner"})
     {:ok, executor} = Executors.authenticate(token)
@@ -25,13 +28,20 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
   end
 
   test "GitHub token endpoint requires executor authentication", ctx do
-    conn = post(build_conn(), "/api/v1/executor/github-token", %{"lease" => ctx.lease, "purpose" => "checkout"})
+    conn =
+      post(build_conn(), "/api/v1/executor/github-token", %{
+        "lease" => ctx.lease,
+        "purpose" => "checkout"
+      })
+
     assert conn.status == 401
     assert json_response(conn, 401) == %{"error" => "unauthorized"}
   end
 
   test "GitHub token endpoint rejects unsupported purposes without calling the provider", ctx do
-    Application.put_env(:dev_orchestrator, :provider_transport, fn _ -> flunk("provider must not be called") end)
+    Application.put_env(:dev_orchestrator, :provider_transport, fn _ ->
+      flunk("provider must not be called")
+    end)
 
     conn = authorized_post(ctx, %{"lease" => ctx.lease, "purpose" => "admin"})
     assert conn.status == 409
@@ -43,7 +53,10 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
     key = :public_key.generate_key({:rsa, 2048, 65_537})
     pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, key)])
-    key_path = Path.join(System.tmp_dir!(), "executor-github-#{System.unique_integer([:positive])}.pem")
+
+    key_path =
+      Path.join(System.tmp_dir!(), "executor-github-#{System.unique_integer([:positive])}.pem")
+
     File.write!(key_path, pem)
 
     Application.put_env(:dev_orchestrator, :github,
@@ -55,24 +68,36 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
       assert opts[:json] == %{repositories: ["acme/app"], permissions: %{contents: "read"}}
 
-      {:ok, %{status: 201, body: %{"token" => "short-lived-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+      {:ok,
+       %{
+         status: 201,
+         body: %{"token" => "short-lived-token", "expires_at" => "2099-01-01T00:00:00Z"}
+       }}
     end)
 
     on_exit(fn ->
-      if old_github, do: Application.put_env(:dev_orchestrator, :github, old_github), else: Application.delete_env(:dev_orchestrator, :github)
-      if old_transport, do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport), else: Application.delete_env(:dev_orchestrator, :provider_transport)
+      if old_github,
+        do: Application.put_env(:dev_orchestrator, :github, old_github),
+        else: Application.delete_env(:dev_orchestrator, :github)
+
+      if old_transport,
+        do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport),
+        else: Application.delete_env(:dev_orchestrator, :provider_transport)
+
       File.rm(key_path)
     end)
 
     conn = authorized_post(ctx, %{"lease" => ctx.lease, "purpose" => "checkout"})
     assert conn.status == 200
 
-    assert %{"data" => %{
-             "token" => "short-lived-token",
-             "expires_at" => "2099-01-01T00:00:00Z",
-             "author_name" => "test-app[bot]",
-             "author_email" => "12345+test-app[bot]@users.noreply.github.com"
-           }} = json_response(conn, 200)
+    assert %{
+             "data" => %{
+               "token" => "short-lived-token",
+               "expires_at" => "2099-01-01T00:00:00Z",
+               "author_name" => "test-app[bot]",
+               "author_email" => "12345+test-app[bot]@users.noreply.github.com"
+             }
+           } = json_response(conn, 200)
   end
 
   test "GitHub provider errors are returned as stable codes without provider details", ctx do
@@ -80,7 +105,10 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
     key = :public_key.generate_key({:rsa, 2048, 65_537})
     pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, key)])
-    key_path = Path.join(System.tmp_dir!(), "executor-github-#{System.unique_integer([:positive])}.pem")
+
+    key_path =
+      Path.join(System.tmp_dir!(), "executor-github-#{System.unique_integer([:positive])}.pem")
+
     File.write!(key_path, pem)
 
     Application.put_env(:dev_orchestrator, :github,
@@ -94,8 +122,14 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
     end)
 
     on_exit(fn ->
-      if old_github, do: Application.put_env(:dev_orchestrator, :github, old_github), else: Application.delete_env(:dev_orchestrator, :github)
-      if old_transport, do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport), else: Application.delete_env(:dev_orchestrator, :provider_transport)
+      if old_github,
+        do: Application.put_env(:dev_orchestrator, :github, old_github),
+        else: Application.delete_env(:dev_orchestrator, :github)
+
+      if old_transport,
+        do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport),
+        else: Application.delete_env(:dev_orchestrator, :provider_transport)
+
       File.rm(key_path)
     end)
 

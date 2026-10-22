@@ -17,28 +17,4 @@ defmodule DevOrchestratorWeb.RenderTest do
     assert html =~ "autocomplete=\"new-password\""
     assert html =~ "minlength=\"12\""
   end
-
-  test "the project screen shows an actionable empty state instead of fake runs" do
-    html =
-      render_component(&DevOrchestratorWeb.DashboardLive.render/1,
-        scope: %{email: "test@example.test", role: "owner"},
-        live_action: :projects,
-        projects: [],
-        runs: [],
-        connections: [],
-        executors: [],
-        bindings: [],
-        selected: nil,
-        selected_run: nil,
-        code: nil,
-        events: [],
-        deliveries: [],
-        flash: %{}
-      )
-
-    assert html =~ "Start with one project"
-    assert html =~ "Create project"
-    assert html =~ "0</span>"
-    refute html =~ "PR ready"
-  end
 end

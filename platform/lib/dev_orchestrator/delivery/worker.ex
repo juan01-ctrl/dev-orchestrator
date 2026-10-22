@@ -11,12 +11,17 @@ defmodule DevOrchestrator.Delivery.Worker do
     end
   end
 
-  def drain(concurrency \\ 4) when is_integer(concurrency) and concurrency in 1..10 do
+  def drain(concurrency \\ 4)
+
+  def drain(concurrency) when is_integer(concurrency) and concurrency in 1..10 do
     1..concurrency
     |> Task.async_stream(fn _ -> drain_slot() end, max_concurrency: concurrency, timeout: 120_000)
     |> Enum.each(fn
-      {:ok, _} -> :ok
-      {:exit, _} -> Logger.warning("Outbox delivery slot failed; pending jobs remain durable for retry.")
+      {:ok, _} ->
+        :ok
+
+      {:exit, _} ->
+        Logger.warning("Outbox delivery slot failed; pending jobs remain durable for retry.")
     end)
   end
 

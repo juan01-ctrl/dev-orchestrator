@@ -5,7 +5,14 @@ defmodule DevOrchestrator.ExecutionPolicy do
     routine: "gpt-6-luna",
     advanced: "gpt-6.1-sol",
     supported: ["gpt-6-luna", "gpt-6.1-sol"],
-    network_hosts: ["registry.npmjs.org", "hex.pm", "repo.hex.pm", "pypi.org", "files.pythonhosted.org", "github.com"]
+    network_hosts: [
+      "registry.npmjs.org",
+      "hex.pm",
+      "repo.hex.pm",
+      "pypi.org",
+      "files.pythonhosted.org",
+      "github.com"
+    ]
   }
 
   def catalog do
@@ -38,25 +45,45 @@ defmodule DevOrchestrator.ExecutionPolicy do
       "error" => if(valid, do: nil, else: "unsupported_model"),
       "permissions" => %{
         "filesystem" => "project_workspace",
-      "git" => ["local_branch", "commit"],
+        "git" => ["local_branch", "commit"],
         "project_skills" => true,
         "global_configuration" => false,
         "deployment" => false
       },
-      "network" => %{"mode" => "exact_host_amendments_only", "allowed_hosts" => config.network_hosts}
+      "network" => %{
+        "mode" => "exact_host_amendments_only",
+        "allowed_hosts" => config.network_hosts
+      }
     }
   end
 
   defp classify(title, prompt) do
     text = [title, prompt] |> Enum.filter(&is_binary/1) |> Enum.join(" ")
-    if Regex.match?(~r/\b(plan(?:ning)?|review|fix(?:es|ing)?|bug|security|refactor|rework|repair|investigat(?:e|ion))\b/i, text), do: "advanced", else: "routine"
+
+    if Regex.match?(
+         ~r/\b(plan(?:ning)?|review|fix(?:es|ing)?|bug|security|refactor|rework|repair|investigat(?:e|ion))\b/i,
+         text
+       ), do: "advanced", else: "routine"
   end
 
-  defp normalize_models(values) when is_list(values), do: values |> Enum.filter(&valid_model_id?/1) |> Enum.uniq()
+  defp normalize_models(values) when is_list(values),
+    do: values |> Enum.filter(&valid_model_id?/1) |> Enum.uniq()
+
   defp normalize_models(_), do: @fallback_models.supported
-  defp normalize_hosts(values) when is_list(values), do: values |> Enum.filter(&valid_hostname?/1) |> Enum.uniq()
+
+  defp normalize_hosts(values) when is_list(values),
+    do: values |> Enum.filter(&valid_hostname?/1) |> Enum.uniq()
+
   defp normalize_hosts(_), do: @fallback_models.network_hosts
 
-  defp valid_model_id?(value), do: is_binary(value) and Regex.match?(~r/\Agpt-[a-z0-9.-]{2,80}\z/, value)
-  defp valid_hostname?(value), do: is_binary(value) and Regex.match?(~r/\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/i, value)
+  defp valid_model_id?(value),
+    do: is_binary(value) and Regex.match?(~r/\Agpt-[a-z0-9.-]{2,80}\z/, value)
+
+  defp valid_hostname?(value),
+    do:
+      is_binary(value) and
+        Regex.match?(
+          ~r/\A(?=.{1,253}\z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\z/i,
+          value
+        )
 end

@@ -30,7 +30,8 @@ defmodule DevOrchestrator.Runs.Lifecycle do
 
   def eligible?(project, issue) do
     is_binary(project["linear_team"]) and project["linear_team"] == get_in(issue, ["team", "id"]) and
-      (is_nil(project["linear_project"]) or project["linear_project"] == get_in(issue, ["project", "id"])) and
+      (is_nil(project["linear_project"]) or
+         project["linear_project"] == get_in(issue, ["project", "id"])) and
       get_in(issue, ["state", "name"]) in (project["active_states"] || ["Todo", "In Progress"])
   end
 
@@ -52,14 +53,30 @@ defmodule DevOrchestrator.Runs.Lifecycle do
   end
 
   defp create_activation(project, issue, activation) do
-    prompt = String.slice((issue["title"] || "") <> "\n\n" <> (issue["description"] || ""), 0, 8_000)
-    title = String.slice((issue["identifier"] || "Issue") <> " — " <> (issue["title"] || "Development task"), 0, 240)
+    prompt =
+      String.slice((issue["title"] || "") <> "\n\n" <> (issue["description"] || ""), 0, 8_000)
+
+    title =
+      String.slice(
+        (issue["identifier"] || "Issue") <> " — " <> (issue["title"] || "Development task"),
+        0,
+        240
+      )
+
     source_key = "linear:" <> issue["id"] <> ":" <> Integer.to_string(activation)
 
     run =
       Store.one(
         "INSERT INTO runs(id,organization_id,project_id,source_key,title,prompt,issue_url) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(project_id,source_key) DO UPDATE SET source_key=excluded.source_key RETURNING *",
-        [Store.id(), project["organization_id"], project["id"], source_key, title, prompt, issue["url"]]
+        [
+          Store.id(),
+          project["organization_id"],
+          project["id"],
+          source_key,
+          title,
+          prompt,
+          issue["url"]
+        ]
       )
 
     Store.exec(
@@ -67,7 +84,11 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       [project["id"], issue["id"], activation, get_in(issue, ["state", "name"]), run["id"]]
     )
 
-    %{result: if(activation == 1, do: :created, else: :rework), run_id: run["id"], activation: activation}
+    %{
+      result: if(activation == 1, do: :created, else: :rework),
+      run_id: run["id"],
+      activation: activation
+    }
   end
 
   defp deactivate(_project, _issue, nil), do: %{result: :unchanged, activation: 0}
@@ -78,11 +99,21 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       [project["id"], issue["id"], get_in(issue, ["state", "name"])]
     )
 
-    run = Store.one("SELECT * FROM runs WHERE id=$1 AND organization_id=$2 FOR UPDATE", [lifecycle["run_id"], project["organization_id"]])
+    run =
+      Store.one("SELECT * FROM runs WHERE id=$1 AND organization_id=$2 FOR UPDATE", [
+        lifecycle["run_id"],
+        project["organization_id"]
+      ])
 
     if run && run["state"] in @active_run_states do
       result = %{"summary" => "Cancelled because the Linear issue left an active workflow state."}
-      cancelled = Store.one("UPDATE runs SET state='cancelled',result=$2,lease_expires_at=NULL,updated_at=now() WHERE id=$1 RETURNING *", [run["id"], result])
+
+      cancelled =
+        Store.one(
+          "UPDATE runs SET state='cancelled',result=$2,lease_expires_at=NULL,updated_at=now() WHERE id=$1 RETURNING *",
+          [run["id"], result]
+        )
+
       DevOrchestrator.Delivery.Outbox.enqueue(cancelled, "cancelled", result)
       %{result: :cancelled, run_id: run["id"], activation: lifecycle["activation"]}
     else

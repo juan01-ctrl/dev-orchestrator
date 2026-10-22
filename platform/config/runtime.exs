@@ -54,7 +54,10 @@ supported_models =
   |> Enum.map(&String.trim/1)
 
 network_hosts =
-  System.get_env("CODEX_NETWORK_ALLOWED_HOSTS", "registry.npmjs.org,hex.pm,repo.hex.pm,pypi.org,files.pythonhosted.org,github.com")
+  System.get_env(
+    "CODEX_NETWORK_ALLOWED_HOSTS",
+    "registry.npmjs.org,hex.pm,repo.hex.pm,pypi.org,files.pythonhosted.org,github.com"
+  )
   |> String.split(",", trim: true)
   |> Enum.map(&String.trim/1)
 

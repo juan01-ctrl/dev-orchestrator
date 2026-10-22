@@ -225,13 +225,17 @@ defmodule DevOrchestrator.ProviderTest do
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
       assert opts[:url] == "https://api.github.com/app/installations/42/access_tokens"
       assert opts[:method] == :post
+
       assert opts[:json] == %{
                repositories: ["acme/app"],
                permissions: %{contents: "read"}
              }
 
       {:ok,
-       %{status: 201, body: %{"token" => "ephemeral-checkout-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+       %{
+         status: 201,
+         body: %{"token" => "ephemeral-checkout-token", "expires_at" => "2099-01-01T00:00:00Z"}
+       }}
     end)
 
     assert {:ok, %{token: "ephemeral-checkout-token", expires_at: "2099-01-01T00:00:00Z"}} =
@@ -245,7 +249,11 @@ defmodule DevOrchestrator.ProviderTest do
                permissions: %{contents: "write", pull_requests: "write"}
              }
 
-      {:ok, %{status: 201, body: %{"token" => "ephemeral-publish-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+      {:ok,
+       %{
+         status: 201,
+         body: %{"token" => "ephemeral-publish-token", "expires_at" => "2099-01-01T00:00:00Z"}
+       }}
     end)
 
     assert {:ok, %{token: "ephemeral-publish-token"}} =

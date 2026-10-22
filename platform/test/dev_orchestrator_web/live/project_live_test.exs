@@ -68,8 +68,13 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
 
   test "accepted run events broadcast after persistence to an authorized subscriber" do
     scope = owner("activity-stream@example.test")
-    {:ok, project} = Projects.create_project(scope, %{"name" => "Stream", "repository" => "acme/stream"})
-    {:ok, run} = DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Work"})
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "Stream", "repository" => "acme/stream"})
+
+    {:ok, run} =
+      DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Work"})
+
     {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
     {:ok, %{token: token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
     {:ok, executor} = DevOrchestrator.Executors.authenticate(token)
@@ -81,21 +86,37 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
              DevOrchestrator.Runs.append_event(executor, lease, %{
                "sequence" => 1,
                "kind" => "activity",
-               "data" => %{"event" => %{"kind" => "warning", "message" => "Validation needs attention."}}
+               "data" => %{
+                 "event" => %{"kind" => "warning", "message" => "Validation needs attention."}
+               }
              })
 
     assert_receive {:run_updated, run_id}
     assert run_id == run["id"]
-    assert [%{"kind" => "activity", "data" => %{"event" => %{"message" => "Validation needs attention."}}}] =
+
+    assert [
+             %{
+               "kind" => "activity",
+               "data" => %{"event" => %{"message" => "Validation needs attention."}}
+             }
+           ] =
              DevOrchestrator.Runs.events(scope, run_id)
   end
 
   test "repository access blockers point to the project setup action without exposing provider details" do
     scope = owner("repository-blocker@example.test")
-    {:ok, project} = Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
-    {:ok, run} = DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Edit"})
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    {:ok, run} =
+      DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Edit"})
+
     {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
-    {:ok, %{token: executor_token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+
+    {:ok, %{token: executor_token}} =
+      DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+
     {:ok, executor} = DevOrchestrator.Executors.authenticate(executor_token)
     :ok = DevOrchestrator.Executors.bind(scope, executor["id"], project.id)
     {:ok, lease} = DevOrchestrator.Runs.claim(executor)
@@ -116,7 +137,10 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, html} = live(conn, "/app/runs/" <> run["id"])
 
     assert html =~ "GitHub App access is not set up for this repository"
-    assert render(view) =~ "Install the configured GitHub App for this repository, then retry the task."
+
+    assert render(view) =~
+             "Install the configured GitHub App for this repository, then retry the task."
+
     refute render(view) =~ "sensitive provider details"
   end
 
@@ -127,16 +151,18 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, html} = live(conn, "/app")
     assert html =~ "Start with one project"
     assert html =~ ~s(href="/templates/instructions.md" download="instructions.md")
+    assert html =~ "Create project"
+    refute html =~ "PR ready"
 
     upload =
-      file_input(view, "form[phx-submit=create_project]", :instructions, [
+      file_input(view, "#new-project", :instructions, [
         %{name: "instructions.md", content: "# Project rules\n"}
       ])
 
     render_upload(upload, "instructions.md")
 
     view
-    |> form("form[phx-submit=create_project]", %{
+    |> form("#new-project", %{
       "name" => "New app",
       "repository" => "acme/new-app",
       "base_branch" => "main"
@@ -156,7 +182,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, _html} = live(conn, "/app")
 
     view
-    |> form("form[phx-submit=create_project]", %{
+    |> form("#new-project", %{
       "name" => "No instructions",
       "repository" => "acme/no-instructions",
       "base_branch" => "main"
@@ -182,7 +208,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, html} = live(conn, "/app/projects/" <> project.id)
     assert html =~ "Saved instructions stay in place unless you upload a replacement."
     assert html =~ "Slack report channel"
-    assert html =~ "Connect Slack below to choose this project's report channel."
+    assert html =~ "Connect Slack below to choose this project&#39;s report channel."
     refute html =~ "Refresh Slack channels"
 
     upload =

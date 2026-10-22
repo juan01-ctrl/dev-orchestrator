@@ -6,11 +6,18 @@ defmodule DevOrchestrator.Intake.Reconciler do
   @max_pages_per_tick 10
 
   def tick_all do
-    Store.rows("SELECT id FROM connections WHERE provider='linear' AND revoked_at IS NULL ORDER BY created_at")
+    Store.rows(
+      "SELECT id FROM connections WHERE provider='linear' AND revoked_at IS NULL ORDER BY created_at"
+    )
     |> Enum.each(fn %{"id" => id} ->
       case tick(id) do
-        {:error, _} -> Logger.warning("Linear reconciliation failed for a connected workspace; retrying from its saved cursor.")
-        _ -> :ok
+        {:error, _} ->
+          Logger.warning(
+            "Linear reconciliation failed for a connected workspace; retrying from its saved cursor."
+          )
+
+        _ ->
+          :ok
       end
     end)
 
@@ -18,7 +25,11 @@ defmodule DevOrchestrator.Intake.Reconciler do
   end
 
   def tick(connection_id) when is_binary(connection_id) do
-    with connection when is_map(connection) <- Store.one("SELECT * FROM connections WHERE id=$1 AND provider='linear' AND revoked_at IS NULL", [connection_id]),
+    with connection when is_map(connection) <-
+           Store.one(
+             "SELECT * FROM connections WHERE id=$1 AND provider='linear' AND revoked_at IS NULL",
+             [connection_id]
+           ),
          {:ok, token} <- Connections.credential(connection),
          projects when projects != [] <- projects_for(connection_id),
          {:ok, cursor} <- load_cursor(connection_id) do
@@ -40,24 +51,36 @@ defmodule DevOrchestrator.Intake.Reconciler do
   end
 
   defp load_cursor(connection_id) do
-    case Store.one("SELECT * FROM linear_reconciliation_cursors WHERE connection_id=$1", [connection_id]) do
+    case Store.one("SELECT * FROM linear_reconciliation_cursors WHERE connection_id=$1", [
+           connection_id
+         ]) do
       nil -> {:ok, %{updated_at: nil, page: nil}}
       row -> {:ok, %{updated_at: row["updated_at_cursor"], page: row["page_cursor"]}}
     end
   end
 
-  defp fetch_pages(_connection, _token, _projects, _teams, _cursor, page_count) when page_count >= @max_pages_per_tick,
-    do: :ok
+  defp fetch_pages(_connection, _token, _projects, _teams, _cursor, page_count)
+       when page_count >= @max_pages_per_tick,
+       do: :ok
 
   defp fetch_pages(connection, token, projects, teams, cursor, page_count) do
     filter = %{"team" => %{"id" => %{"in" => teams}}}
-    filter = if cursor.updated_at, do: Map.put(filter, "updatedAt", %{"gte" => DateTime.to_iso8601(cursor.updated_at)}), else: filter
 
-    query = "query($after:String,$filter:IssueFilter){issues(first:100,after:$after,filter:$filter,orderBy:updatedAt){nodes{id identifier title description url updatedAt state{name} team{id} project{id}} pageInfo{hasNextPage endCursor}}}"
+    filter =
+      if cursor.updated_at,
+        do: Map.put(filter, "updatedAt", %{"gte" => DateTime.to_iso8601(cursor.updated_at)}),
+        else: filter
+
+    query =
+      "query($after:String,$filter:IssueFilter){issues(first:100,after:$after,filter:$filter,orderBy:updatedAt){nodes{id identifier title description url updatedAt state{name} team{id} project{id}} pageInfo{hasNextPage endCursor}}}"
 
     case Linear.query(token, query, %{"after" => cursor.page, "filter" => filter}) do
-      {:ok, %{"data" => %{"issues" => %{"nodes" => issues, "pageInfo" => page_info}}}} when is_list(issues) ->
-        Enum.each(issues, fn issue -> Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue)) end)
+      {:ok, %{"data" => %{"issues" => %{"nodes" => issues, "pageInfo" => page_info}}}}
+      when is_list(issues) ->
+        Enum.each(issues, fn issue ->
+          Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
+        end)
+
         next_updated = Enum.reduce(issues, cursor.updated_at, &later(&1["updatedAt"], &2))
         next_page = if page_info["hasNextPage"], do: page_info["endCursor"], else: nil
 
@@ -65,7 +88,14 @@ defmodule DevOrchestrator.Intake.Reconciler do
         save_cursor(connection["id"], saved_updated, next_page, nil)
 
         if next_page do
-          fetch_pages(connection, token, projects, teams, %{updated_at: cursor.updated_at, page: next_page}, page_count + 1)
+          fetch_pages(
+            connection,
+            token,
+            projects,
+            teams,
+            %{updated_at: cursor.updated_at, page: next_page},
+            page_count + 1
+          )
         else
           :ok
         end
@@ -82,6 +112,7 @@ defmodule DevOrchestrator.Intake.Reconciler do
 
   defp later(nil, cursor), do: cursor
   defp later(value, nil), do: parse_datetime(value)
+
   defp later(value, cursor) do
     case parse_datetime(value) do
       %DateTime{} = next -> if DateTime.compare(next, cursor) == :gt, do: next, else: cursor
@@ -90,9 +121,14 @@ defmodule DevOrchestrator.Intake.Reconciler do
   end
 
   defp parse_datetime(%DateTime{} = value), do: value
+
   defp parse_datetime(value) when is_binary(value) do
-    case DateTime.from_iso8601(value) do {:ok, datetime, _} -> datetime; _ -> nil end
+    case DateTime.from_iso8601(value) do
+      {:ok, datetime, _} -> datetime
+      _ -> nil
+    end
   end
+
   defp parse_datetime(_), do: nil
 
   defp save_cursor(connection_id, updated_at, page, error) do

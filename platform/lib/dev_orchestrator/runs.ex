@@ -174,55 +174,65 @@ defmodule DevOrchestrator.Runs do
 
   def append_event(executor, lease, %{"sequence" => sequence, "kind" => kind} = event)
       when is_integer(sequence) and sequence > 0 and
-      kind in ~w(started progress activity failure blocked candidate no_changes) do
-    result = Store.transaction(fn ->
-      live_executor!(executor)
+             kind in ~w(started progress activity failure blocked candidate no_changes) do
+    result =
+      Store.transaction(fn ->
+        live_executor!(executor)
 
-      run =
-        Store.one("SELECT * FROM runs WHERE id=$1 AND organization_id=$2 FOR UPDATE", [
-          lease["id"],
-          executor["organization_id"]
-        ]) || Store.halt(:stale_lease)
+        run =
+          Store.one("SELECT * FROM runs WHERE id=$1 AND organization_id=$2 FOR UPDATE", [
+            lease["id"],
+            executor["organization_id"]
+          ]) || Store.halt(:stale_lease)
 
-      valid_generation!(run, executor, lease)
+        valid_generation!(run, executor, lease)
 
-      if sequence <= run["sequence"] do
-        :duplicate
-      else
-        if sequence != run["sequence"] + 1, do: Store.halt(:sequence_gap)
-        if run["state"] not in ~w(leased running) or expired?(run), do: Store.halt(:stale_lease)
+        if sequence <= run["sequence"] do
+          :duplicate
+        else
+          if sequence != run["sequence"] + 1, do: Store.halt(:sequence_gap)
+          if run["state"] not in ~w(leased running) or expired?(run), do: Store.halt(:stale_lease)
 
-        data =
-          case DevOrchestrator.Runs.Event.sanitize(run, kind, Map.get(event, "data", %{})) do
-            {:ok, safe} -> safe
-            {:error, reason} -> Store.halt(reason)
-          end
+          data =
+            case DevOrchestrator.Runs.Event.sanitize(run, kind, Map.get(event, "data", %{})) do
+              {:ok, safe} -> safe
+              {:error, reason} -> Store.halt(reason)
+            end
 
-        Store.exec("INSERT INTO run_events VALUES($1,$2,$3,$4,$5,$6,$7,now())", [
-          run["organization_id"],
-          run["id"],
-          run["lifecycle"],
-          run["generation"],
-          sequence,
-          kind,
-          data
-        ])
+          Store.exec("INSERT INTO run_events VALUES($1,$2,$3,$4,$5,$6,$7,now())", [
+            run["organization_id"],
+            run["id"],
+            run["lifecycle"],
+            run["generation"],
+            sequence,
+            kind,
+            data
+          ])
 
-        Store.exec("UPDATE runs SET sequence=$2,updated_at=now() WHERE id=$1", [
-          run["id"],
-          sequence
-        ])
+          Store.exec("UPDATE runs SET sequence=$2,updated_at=now() WHERE id=$1", [
+            run["id"],
+            sequence
+          ])
 
-        transition(run, kind, data)
-      end
-    end)
+          transition(run, kind, data)
+        end
+      end)
 
     case result do
-      {:ok, :duplicate} -> result
-      {:ok, _} ->
-        Phoenix.PubSub.broadcast(DevOrchestrator.PubSub, "run:" <> lease["id"], {:run_updated, lease["id"]})
+      {:ok, :duplicate} ->
         result
-      _ -> result
+
+      {:ok, _} ->
+        Phoenix.PubSub.broadcast(
+          DevOrchestrator.PubSub,
+          "run:" <> lease["id"],
+          {:run_updated, lease["id"]}
+        )
+
+        result
+
+      _ ->
+        result
     end
   end
 

@@ -53,7 +53,12 @@ defmodule DevOrchestrator.EventTest do
 
   test "activity timeline events are allowlisted, bounded, and redact local paths and credentials" do
     {:ok, %{"event" => %{"kind" => "message_delta", "text" => text}}} =
-      Event.sanitize(%{}, "activity", %{"event" => %{"kind" => "message_delta", "text" => "Updated /Users/juan/project and ghp_123456789012345678901234567890"}})
+      Event.sanitize(%{}, "activity", %{
+        "event" => %{
+          "kind" => "message_delta",
+          "text" => "Updated /Users/juan/project and ghp_123456789012345678901234567890"
+        }
+      })
 
     refute text =~ "/Users/juan"
     refute text =~ "ghp_"
@@ -61,7 +66,9 @@ defmodule DevOrchestrator.EventTest do
     assert text =~ "[redacted]"
 
     assert {:error, :invalid_event} =
-             Event.sanitize(%{}, "activity", %{"event" => %{"kind" => "command_output", "text" => "private"}})
+             Event.sanitize(%{}, "activity", %{
+               "event" => %{"kind" => "command_output", "text" => "private"}
+             })
   end
 
   test "repository setup and PR verification milestones are allowlisted without free-form detail" do
@@ -70,9 +77,18 @@ defmodule DevOrchestrator.EventTest do
                Event.sanitize(%{}, "progress", %{"stage" => stage, "output" => "private"})
     end
 
-    for category <- ["github_installation_required", "github_permission_denied", "base_branch_missing", "github_unavailable", "workspace_setup_failed"] do
+    for category <- [
+          "github_installation_required",
+          "github_permission_denied",
+          "base_branch_missing",
+          "github_unavailable",
+          "workspace_setup_failed"
+        ] do
       assert {:ok, %{"category" => ^category} = safe} =
-               Event.sanitize(%{}, "blocked", %{"category" => category, "provider_body" => "secret"})
+               Event.sanitize(%{}, "blocked", %{
+                 "category" => category,
+                 "provider_body" => "secret"
+               })
 
       refute inspect(safe) =~ "secret"
     end

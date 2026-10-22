@@ -1,5 +1,6 @@
 # Pure security/protocol checks only. This is not a substitute for mix test + PostgreSQL.
-for app <- ~w(jason req), profile <- ~w(test dev),
+for app <- ~w(jason req),
+    profile <- ~w(test dev),
     path = "_build/#{profile}/lib/#{app}/ebin",
     File.dir?(path),
     do: Code.append_path(path)
