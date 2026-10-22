@@ -27,21 +27,33 @@ Current verification:
 | Check | Result |
 |---|---|
 | Connector `npm run check && npm test` | Passed after recovery/clarification changes: 49 tests, 0 failures |
+| Platform `mise exec -- mix test` | User-run: 94 tests, 0 failures |
+| Platform `mise exec -- mix format --check-formatted` | User-run: passed after formatting `runs.ex` |
 | Platform offline harness | Passed: 37 tests, 0 failures; database-backed assertions are not part of this harness |
 | Clarification contract tests | Passed directly: 3 tests, 0 failures |
 | Changed/new Elixir syntax | Parsed successfully: 20 files |
 | `git diff --check` | Passed |
-| Full platform `mise exec -- mix test` | Blocked before ExUnit: Mix 1.19.5 cannot open its local PubSub TCP socket (`:eperm`) |
-| Project `mix format --check-formatted` | Not verified: Mix cannot start in this environment; core Elixir formatting was applied, but the LiveView plugin formatter was not run |
+| Full platform `mise exec -- mix test` in this sandbox | Blocked before ExUnit: Mix 1.19.5 cannot open its local PubSub TCP socket (`:eperm`); the user separately ran the full suite successfully |
+| Project `mix format --check-formatted` in this sandbox | Blocked by the same Mix socket restriction; the user separately ran the full check successfully |
 | Real Linear/Slack/GitHub/Codex smoke tests | Not run; no external task/message, PR, or deployment was initiated |
 
 Same-thread resume, stale-lock recovery, durable Slack/UI clarification, component
 readiness diagnostics, and low-cardinality intake/reconciliation/heartbeat/
 lease/run-event/report telemetry are implemented in this worktree. Database-backed
-run/controller/LiveView verification, full Mix formatting, executor slot-capacity
-gauges, and the owner-authorized provider end-to-end scenarios remain open. Do not
-present the implementation as fully verified or production-ready until those gates
-pass.
+run/controller/LiveView verification and full Mix formatting are now confirmed by
+the user's successful platform test/format runs. Executor slot-capacity gauges and
+the owner-authorized provider end-to-end scenarios remain open. The source is still
+not a production-verified release until those remaining gates pass.
+
+## Parity acceptance run — October 22, 2026
+
+- Connector typecheck and suite: **49 passed, 0 failed** (run in the worktree).
+- Platform suite: **94 passed, 0 failed** (reported by the user from their local environment).
+- Platform formatter check: **passed** (reported by the user after correcting `runs.ex`).
+- No real Linear issue, Slack notification, GitHub PR, dependency-install network test,
+  concurrent provider task, or connector restart scenario was triggered. These require
+  a designated test project/repository/channel and owner authorization; acceptance
+  criteria remain incomplete rather than inferred from unit tests.
 
 ## Automatic repository bootstrap — October 21, 2026
 

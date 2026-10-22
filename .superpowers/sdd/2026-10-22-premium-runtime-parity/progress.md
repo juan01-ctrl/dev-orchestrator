@@ -73,3 +73,8 @@
 - Added low-cardinality telemetry for Linear webhook acceptance/reconciliation, executor heartbeats, run-lease queue wait, accepted run events (including turn-completion and publication event kinds), and report delivery duration/attempt/outcome. Metadata deliberately excludes tenant, issue, and credential data.
 - Fresh checks: connector `npm run check && npm test` → 49 passed; offline platform suite → 37 passed; clarification contract tests → 3 passed; 20 changed/new Elixir files parse; `git diff --check` passes. Full Mix tests and plugin-backed formatting remain unverified because Mix cannot open the local PubSub TCP socket (`:eperm`).
 - Task 7 remains partial: executor slot-capacity gauges, full database-backed delivery/operations tests, and owner-authorized provider acceptance scenarios remain outstanding.
+
+## Task 8
+
+- Automated gates now pass: connector typecheck/tests 49/49; platform suite 94/94 and `mix format --check-formatted` passed in the user's local environment.
+- External acceptance scenarios were not run. Creating Linear issues, sending Slack notifications, opening GitHub PRs, or interrupting live executions needs a designated test project/repository/channel and explicit owner authorization. Record these as outstanding, not passed.
