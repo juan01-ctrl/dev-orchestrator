@@ -25,22 +25,36 @@ defmodule DevOrchestrator.Intake.Reconciler do
   end
 
   def tick(connection_id) when is_binary(connection_id) do
-    with connection when is_map(connection) <-
-           Store.one(
-             "SELECT * FROM connections WHERE id=$1 AND provider='linear' AND revoked_at IS NULL",
-             [connection_id]
-           ),
-         {:ok, token} <- Connections.credential(connection),
-         projects when projects != [] <- projects_for(connection_id),
-         {:ok, cursor} <- load_cursor(connection_id) do
-      teams = projects |> Enum.map(& &1["linear_team"]) |> Enum.reject(&is_nil/1) |> Enum.uniq()
-      if teams == [], do: :ok, else: fetch_pages(connection, token, projects, teams, cursor, 0)
-    else
-      nil -> :ok
-      [] -> :ok
-      {:error, _} = error -> error
-      _ -> :ok
-    end
+    started = System.monotonic_time()
+
+    result =
+      with connection when is_map(connection) <-
+             Store.one(
+               "SELECT * FROM connections WHERE id=$1 AND provider='linear' AND revoked_at IS NULL",
+               [connection_id]
+             ),
+           {:ok, token} <- Connections.credential(connection),
+           projects when projects != [] <- projects_for(connection_id),
+           {:ok, cursor} <- load_cursor(connection_id) do
+        teams = projects |> Enum.map(& &1["linear_team"]) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+        if teams == [], do: :ok, else: fetch_pages(connection, token, projects, teams, cursor, 0)
+      else
+        nil -> :ok
+        [] -> :ok
+        {:error, _} = error -> error
+        _ -> :ok
+      end
+
+    :telemetry.execute(
+      [:dev_orchestrator, :linear, :reconciliation],
+      %{
+        duration_ms:
+          System.convert_time_unit(System.monotonic_time() - started, :native, :millisecond)
+      },
+      %{outcome: if(match?({:error, _}, result), do: "failed", else: "completed")}
+    )
+
+    result
   end
 
   defp projects_for(connection_id) do

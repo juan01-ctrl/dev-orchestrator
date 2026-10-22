@@ -6,7 +6,7 @@ defmodule DevOrchestrator.Delivery.Worker do
 
   def tick do
     case Outbox.claim() do
-      {:ok, row} when is_map(row) -> Outbox.delivery_result(row, deliver(row))
+      {:ok, row} when is_map(row) -> deliver_row(row)
       _ -> :ok
     end
   end
@@ -30,7 +30,7 @@ defmodule DevOrchestrator.Delivery.Worker do
   defp drain_slot do
     case Outbox.claim() do
       {:ok, row} when is_map(row) ->
-        Outbox.delivery_result(row, deliver(row))
+        deliver_row(row)
         drain_slot()
 
       _ ->
@@ -39,12 +39,12 @@ defmodule DevOrchestrator.Delivery.Worker do
   end
 
   defp deliver(row) do
-    [provider, _state] = String.split(row["kind"], ":")
+    [provider, delivery | _] = String.split(row["kind"], ":")
     connection = Connections.for_project(row["organization_id"], row["project_id"], provider)
 
     if connection do
       case Connections.credential(connection) do
-        {:ok, token} -> send_report(provider, token, row["payload"])
+        {:ok, token} -> send_report(provider, delivery, token, row["payload"])
         _ -> :rejected
       end
     else
@@ -52,7 +52,39 @@ defmodule DevOrchestrator.Delivery.Worker do
     end
   end
 
-  defp send_report("slack", token, payload) do
+  defp deliver_row(row) do
+    started = System.monotonic_time()
+    result = deliver(row)
+    elapsed = System.monotonic_time() - started
+    [provider | _] = String.split(row["kind"], ":")
+
+    :telemetry.execute(
+      [:dev_orchestrator, :outbox, :delivery],
+      %{
+        duration_ms: System.convert_time_unit(elapsed, :native, :millisecond),
+        attempts: row["attempts"]
+      },
+      %{provider: provider, outcome: delivery_outcome(result)}
+    )
+
+    Outbox.delivery_result(row, result)
+  end
+
+  defp delivery_outcome(:ok), do: "sent"
+  defp delivery_outcome(:rejected), do: "rejected"
+  defp delivery_outcome(:ambiguous), do: "ambiguous"
+  defp delivery_outcome(:not_configured), do: "not_configured"
+  defp delivery_outcome(_), do: "failed"
+
+  defp send_report("slack", "clarification", token, payload) do
+    channel = payload["snapshot"]["slack_channel"]
+
+    if is_binary(channel) and Regex.match?(~r/\A[CG][A-Z0-9]+\z/, channel),
+      do: Slack.deliver(token, Slack.clarification(payload, channel)),
+      else: :not_configured
+  end
+
+  defp send_report("slack", _state, token, payload) do
     channel = payload["snapshot"]["slack_channel"]
 
     if is_binary(channel) and Regex.match?(~r/\A[CG][A-Z0-9]+\z/, channel),
@@ -60,7 +92,7 @@ defmodule DevOrchestrator.Delivery.Worker do
       else: :not_configured
   end
 
-  defp send_report("linear", token, payload) do
+  defp send_report("linear", _state, token, payload) do
     if String.starts_with?(payload["source_key"], "linear:") and payload["state"] == "succeeded" and
          payload["result"]["pr_url"] do
       id = String.replace_prefix(payload["source_key"], "linear:", "")

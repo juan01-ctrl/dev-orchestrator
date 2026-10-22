@@ -26,17 +26,22 @@ Current verification:
 
 | Check | Result |
 |---|---|
-| Connector `npm run check && npm test` | 42 passed, 0 failed |
-| Platform offline harness | 36 passed, 0 failed; its known missing database-module compiler warnings remain |
-| Platform `mise exec -- mix test` | Blocked before ExUnit: Mix 1.19.5 cannot open its local PubSub TCP socket (`:eperm`) |
-| Platform `mix format --check-formatted` | Blocked because `phoenix_live_view` formatter dependency is not installed in this worktree |
+| Connector `npm run check && npm test` | Passed after recovery/clarification changes: 49 tests, 0 failures |
+| Platform offline harness | Passed: 37 tests, 0 failures; database-backed assertions are not part of this harness |
+| Clarification contract tests | Passed directly: 3 tests, 0 failures |
+| Changed/new Elixir syntax | Parsed successfully: 20 files |
+| `git diff --check` | Passed |
+| Full platform `mise exec -- mix test` | Blocked before ExUnit: Mix 1.19.5 cannot open its local PubSub TCP socket (`:eperm`) |
+| Project `mix format --check-formatted` | Not verified: Mix cannot start in this environment; core Elixir formatting was applied, but the LiveView plugin formatter was not run |
 | Real Linear/Slack/GitHub/Codex smoke tests | Not run; no external task/message, PR, or deployment was initiated |
 
-Still incomplete before parity can be claimed: same-thread crash resume, durable
-Slack/UI clarification flow, stale-lock recovery, complete PostgreSQL/controller/
-LiveView integration coverage, production telemetry/readiness details, and the
-authorized provider end-to-end acceptance scenarios. The implementation must not
-be presented as fully verified or production-ready until these gates pass.
+Same-thread resume, stale-lock recovery, durable Slack/UI clarification, component
+readiness diagnostics, and low-cardinality intake/reconciliation/heartbeat/
+lease/run-event/report telemetry are implemented in this worktree. Database-backed
+run/controller/LiveView verification, full Mix formatting, executor slot-capacity
+gauges, and the owner-authorized provider end-to-end scenarios remain open. Do not
+present the implementation as fully verified or production-ready until those gates
+pass.
 
 ## Automatic repository bootstrap — October 21, 2026
 
@@ -84,9 +89,10 @@ Fresh verification for the premium runtime parity work:
 The offline harness now loads the GitHub provider and the already-built Jason/Req
 dependencies when available. This corrects the earlier false-negative run where
 eight provider tests failed because the harness omitted GitHub; it does not replace
-the full Mix/PostgreSQL suite. App-server resume, generic Linear webhooks, issue
-reconciliation, PubSub streaming, model/capability policy and executor slot pooling
-remain unimplemented until their plan tasks are completed.
+the full Mix/PostgreSQL suite. At this baseline checkpoint, app-server resume,
+generic Linear webhooks, issue reconciliation, PubSub streaming, model/capability
+policy and executor slot pooling were not yet implemented; subsequent sections
+record the work completed after that point.
 
 ## Source implemented
 
@@ -116,10 +122,11 @@ remain unimplemented until their plan tasks are completed.
 | Git destination inspection | Terminal CONNECT proxy 403; connected GitHub read 404 (absence vs access cannot be distinguished) |
 | Push / remote HEAD verification | Not performed; destination inaccessible and integrated gates incomplete |
 
-Offline compiler warnings identify unavailable Ecto SQL/Postgrex/password/email
-packages; compilation against cached libraries is not a substitute for the complete
-dependency build. The platform lockfile remains unresolved. The connector lockfile
-was generated from the local package cache without global software installation.
+Offline compiler warnings identify database-backed modules omitted by the offline
+harness; they are not a substitute for the complete dependency build. Both
+`connector/package-lock.json` and `platform/mix.lock` are tracked. The connector
+lockfile was generated from the local package cache without global software
+installation.
 
 ## Review findings addressed
 
@@ -151,7 +158,7 @@ the complete integration gate, not just a static review.
 ## Resume
 
 1. Start Docker outside the restricted execution environment and follow the README.
-2. Resolve and commit `platform/mix.lock`; run complete server/connector checks.
+2. Verify the tracked `platform/mix.lock`; run complete server/connector checks.
 3. Complete browser, restart/concurrency and designated provider smoke tests from
    `docs/evaluation.md`, fixing observed failures before claiming completion.
 4. Verify access/history of `juan01-ctrl/dev-orchestrator`, then push without force

@@ -45,8 +45,20 @@ If enabling GitHub, pass an operator-owned override file in all three commands
 to mount its private key read-only at `GITHUB_PRIVATE_KEY_PATH` inside the container.
 Do not place the key in the build context.
 
-`GET /api/v1/health` checks the web process; `/api/v1/ready` also checks database
-access. Provider authorization is a separate check, not implied by readiness.
+`GET /api/v1/health` checks the web process. `/api/v1/ready` requires database
+access and reports component states for optional provider apps, live executors,
+task/intake queues and report delivery. Optional integrations can be unconfigured
+without making the web service unready; queue backlogs and delivery incidents are
+reported as component states without tenant identifiers or raw provider details.
+The readiness body intentionally reports qualitative states rather than queue
+counts or tenant-specific data.
+The service emits low-cardinality `:telemetry` events for Linear webhook intake
+and reconciliation, executor heartbeats, run lease queue wait, accepted run events
+(including Codex turn and publication events), and provider report delivery.
+Measurements contain counts and durations; metadata contains only bounded event
+kinds, provider names, and outcome categories. Attach a metrics exporter through
+the standard Elixir `:telemetry` ecosystem; do not add tenant IDs, issue titles,
+tokens, or raw provider responses as labels.
 
 The connector defaults to one task slot. Set `DEV_ORCHESTRATOR_SLOTS` to an integer
 from 1 to 10 before starting it to enable multiple isolated local runs. Effective
@@ -70,7 +82,8 @@ with the normal release migration command before starting updated binaries.
 
 ## Reproducibility and current validation limits
 
-The connector has a lockfile. The platform dependency lockfile must be resolved
-and committed from the first successful `mix deps.get`; package access was blocked
-in the implementation harness. Until that is done and the full checks pass,
-this is not a reproducibly verified server build.
+The connector and platform both include lockfiles. The implementation harness
+cannot run `mix test` because Mix.PubSub is denied a local TCP socket (`:eperm`);
+that environment restriction is not evidence that database-backed tests pass.
+Run the complete suite and migration checks in a normal local development
+environment before exposing the service.

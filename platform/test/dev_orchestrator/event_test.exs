@@ -72,7 +72,12 @@ defmodule DevOrchestrator.EventTest do
   end
 
   test "repository setup and PR verification milestones are allowlisted without free-form detail" do
-    for stage <- ["repository_preparing", "resuming_thread", "pr_verifying"] do
+    for stage <- [
+          "repository_preparing",
+          "resuming_thread",
+          "waiting_for_context",
+          "pr_verifying"
+        ] do
       assert {:ok, %{"stage" => ^stage}} =
                Event.sanitize(%{}, "progress", %{"stage" => stage, "output" => "private"})
     end

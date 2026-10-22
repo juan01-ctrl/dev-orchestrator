@@ -22,20 +22,33 @@ defmodule DevOrchestrator.Intake.Inbox do
   def normalize_linear(_, _), do: {:error, :invalid_payload}
 
   def accept_linear(headers, raw_body) when is_map(headers) and is_binary(raw_body) do
-    with {:ok, org_id, event, delivery_id} <- normalize_linear(headers, raw_body) do
-      case Store.one(
-             "INSERT INTO webhook_inbox(id,provider,delivery_id,organization_external_id,event) VALUES($1,'linear',$2,$3,$4) ON CONFLICT(provider,delivery_id) DO NOTHING RETURNING id",
-             [Store.id(), delivery_id, org_id, event]
-           ) do
-        %{"id" => _} -> {:ok, :accepted}
-        nil -> {:ok, :duplicate}
+    result =
+      with {:ok, org_id, event, delivery_id} <- normalize_linear(headers, raw_body) do
+        case Store.one(
+               "INSERT INTO webhook_inbox(id,provider,delivery_id,organization_external_id,event) VALUES($1,'linear',$2,$3,$4) ON CONFLICT(provider,delivery_id) DO NOTHING RETURNING id",
+               [Store.id(), delivery_id, org_id, event]
+             ) do
+          %{"id" => _} -> {:ok, :accepted}
+          nil -> {:ok, :duplicate}
+        end
+      else
+        {:error, _} = error -> error
       end
-    else
-      {:error, _} = error -> error
-    end
+
+    :telemetry.execute(
+      [:dev_orchestrator, :linear, :webhook],
+      %{count: 1},
+      %{outcome: webhook_outcome(result)}
+    )
+
+    result
   end
 
   def accept_linear(_, _), do: {:error, :invalid_payload}
+
+  defp webhook_outcome({:ok, :accepted}), do: "accepted"
+  defp webhook_outcome({:ok, :duplicate}), do: "duplicate"
+  defp webhook_outcome(_), do: "rejected"
 
   def claim do
     Store.transaction(fn ->

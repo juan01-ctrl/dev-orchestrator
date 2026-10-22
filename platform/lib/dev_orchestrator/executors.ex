@@ -107,6 +107,12 @@ defmodule DevOrchestrator.Executors do
       [executor["id"], safe]
     )
 
+    :telemetry.execute(
+      [:dev_orchestrator, :executors, :heartbeat],
+      %{count: 1},
+      %{outcome: "accepted"}
+    )
+
     :ok
   end
 end

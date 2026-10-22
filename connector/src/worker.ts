@@ -10,6 +10,22 @@ import type { Config, JournalState } from "./types.ts";
 type Transport={post:(path:string,payload:unknown)=>Promise<any>};
 type ExecutionDependencies={dataRoot?:string;repositories?:RepositoryWorkspace;publisherFactory?:(context:PublicationContext)=>Publisher};
 
+export async function waitForClarification(api:Transport,lease:JournalState["lease"],params:any,signal?:AbortSignal,pollIntervalMs=3_000):Promise<{response:unknown;expired:boolean}> {
+  const request=await api.post("/executor/clarifications/request",{lease,questions:params?.questions,turnId:params?.turnId??params?.turn_id??""});
+  if(request.status==="answered")return {response:request.answer??{answers:{}},expired:false};
+  if(request.status==="expired")return {response:{answers:{}},expired:true};
+  if(typeof request.id!=="string")throw new Error("The clarification request could not be persisted.");
+  const deadline=Date.now()+19*60_000;
+  while(!signal?.aborted&&Date.now()<deadline) {
+    const current=await api.post("/executor/clarifications/status",{lease,id:request.id});
+    if(current.status==="answered")return {response:current.answer??{answers:{}},expired:false};
+    if(current.status==="expired")return {response:{answers:{}},expired:true};
+    await new Promise(resolve=>setTimeout(resolve,pollIntervalMs));
+  }
+  if(signal?.aborted)throw new Error("Clarification wait was interrupted.");
+  return {response:{answers:{}},expired:true};
+}
+
 export async function emitDurably(api:Transport,journal:Journal,state:JournalState,kind:string,data:Record<string,unknown>):Promise<any> {
   if(state.pending_event)throw new Error("A previous event still needs acknowledgement.");
   state.sequence++;
@@ -147,6 +163,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       "Task: "+String(state.lease.title??""),String(state.lease.prompt??"")
     ].join("\n\n");
     let activityWrites = Promise.resolve();
+    let contextExpired=false;
     const writeEvent = (kind:string,data:Record<string,unknown>) => {
       activityWrites = activityWrites.then(() => emitDurably(api,journal,state,kind,data));
       return activityWrites;
@@ -159,9 +176,26 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       stage=>writeEvent("progress",{stage}),
       event=>writeEvent("activity",{event}),
       snapshot.execution_policy,
-      {threadId:state.thread_id,onThreadStarted:async threadId=>{state.thread_id=threadId;await journal.save(state);}}
+      {
+        threadId:state.thread_id,
+        onThreadStarted:async threadId=>{state.thread_id=threadId;await journal.save(state);},
+        onUserInput:async params=>{
+          await writeEvent("progress",{stage:"waiting_for_context"});
+          let result:{response:unknown;expired:boolean};
+          try {
+            result=await waitForClarification(api,state.lease,params,controller.signal);
+          } catch(error) {
+            if(controller.signal.aborted)throw error;
+            result={response:{answers:{}},expired:true};
+          }
+          contextExpired=contextExpired||result.expired;
+          await writeEvent("progress",{stage:"working"});
+          return result.response;
+        }
+      }
     );
     await activityWrites;
+    if(contextExpired)throw new CodexBlockedError("Clarification expired before the owner responded.");
     session.stop();session=undefined;
     phase="publication_failed";
     await api.post("/executor/renew",state.lease);

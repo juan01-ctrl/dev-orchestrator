@@ -102,6 +102,12 @@ defmodule DevOrchestratorWeb.DashboardComponents do
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "workspace_ready"}}),
     do: "Workspace prepared"
 
+  def activity_title(%{"kind" => "progress", "data" => %{"stage" => "resuming_thread"}}),
+    do: "Resuming the existing task"
+
+  def activity_title(%{"kind" => "progress", "data" => %{"stage" => "waiting_for_context"}}),
+    do: "Waiting for your context"
+
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "agent_started"}}),
     do: "Implementation started"
 
@@ -171,6 +177,16 @@ defmodule DevOrchestratorWeb.DashboardComponents do
 
   def activity_description(%{"kind" => "progress", "data" => %{"stage" => "workspace_ready"}}),
     do: "The repository checkout and project instructions are ready."
+
+  def activity_description(%{"kind" => "progress", "data" => %{"stage" => "resuming_thread"}}),
+    do:
+      "The executor recovered the saved workspace and is continuing the same Codex conversation."
+
+  def activity_description(%{
+        "kind" => "progress",
+        "data" => %{"stage" => "waiting_for_context"}
+      }),
+      do: "A clarification was requested. Answer it below or use the secure link in Slack."
 
   def activity_description(%{
         "kind" => "progress",

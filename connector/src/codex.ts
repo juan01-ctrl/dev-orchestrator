@@ -42,14 +42,15 @@ export class CodexSession {
   initialize(): Promise<void> { return this.session.initialize(); }
   authenticated(): Promise<boolean> { return this.session.authenticated(); }
 
-  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; onThreadStarted?: (threadId: string) => Promise<void> } = {}): Promise<void> {
+  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; onThreadStarted?: (threadId: string) => Promise<void>; onUserInput?: (params: any) => Promise<unknown> } = {}): Promise<void> {
     if (signal?.aborted) throw new Error("Task stopped before lease expiration.");
     if (policy && policy.valid === false) throw new CodexPolicyError("Configured model is not supported by this executor deployment.");
     const selectedModel = typeof policy?.model === "string" ? policy.model : model;
     const allowedHosts = new Set<string>(Array.isArray(policy?.network?.allowed_hosts) ? policy.network.allowed_hosts.filter((host: unknown): host is string => typeof host === "string").map((host: string) => host.toLowerCase()) : []);
     this.session.configureRequestHandlers({
       authorizeCommand: params => authorizeCommand(workspace, [...allowedHosts], params),
-      authorizeFileChange: params => authorizeFileChange(workspace, params)
+      authorizeFileChange: params => authorizeFileChange(workspace, params),
+      ...(recovery.onUserInput ? { requestUserInput: params => recovery.onUserInput?.(params) } : {})
     });
     const threadOptions = { cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model: selectedModel };
     const threadId = recovery.threadId

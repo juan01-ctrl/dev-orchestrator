@@ -14,6 +14,8 @@ HTTPS is required outside loopback development. Redirects are not followed.
 | `/executor/github-token` | `lease`, `purpose` (`checkout` or `publish`) | short-lived repository-scoped GitHub App token and app author identity |
 | `/executor/events` | `lease`, sequenced `event` | `data.state` or `data: "duplicate"` |
 | `/executor/reconcile` | `lease`, journal summary with optional pending event | `data.action` |
+| `/executor/clarifications/request` | `lease`, `turnId`, Codex questions | durable request `id`, status, and any previously saved answer |
+| `/executor/clarifications/status` | `lease`, clarification `id` | `open`, `answered` with answer, or `expired` |
 
 A lease contains `id`, `project_id`, `generation`, `lifecycle`, `sequence`,
 `expires_in_ms` (90,000), task title/prompt and immutable project `snapshot`.
@@ -53,10 +55,21 @@ deadline. A failed renewal never extends that deadline. Before publication, perf
 another synchronous lease check. A revoked credential or stale lease stops work.
 
 After a crash or lost acknowledgement, reconcile the journal before claiming new
-work. The server either acknowledges its terminal state or permits replay of the
-pending event under the same generation. Replaying a nonterminal event does not
-authorize restarting Codex; reconcile it as interrupted afterward. Never reassign
-an expired active task automatically, force-push, or clear user files on reconnect.
+work. The server either acknowledges its terminal state, permits replay of the
+pending event under the same generation, or resumes the saved Codex thread when
+the journal still has a valid thread ID, workspace and baseline. The connector
+keeps that worktree and avoids replaying the original task as a new claim. Never
+reassign an expired active task automatically, force-push, or clear user files on
+reconnect.
+
+When Codex requests missing context, the connector persists one bounded clarification
+per run generation and turns the app-server response into a durable owner response.
+The run page accepts answers; Slack receives a link to that page when the project has
+a configured report channel. The executor waits up to 19 minutes while renewing its
+lease. The request expires after 20 minutes; an unanswered request becomes a blocked
+run, not a silent success. Secret-input questions are rejected, and question/answer
+text is bounded and redacted before storage. Codex responses use the app-server's
+question-keyed `answers` object; see the [official response schema](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/json/ToolRequestUserInputResponse.json).
 
 The connector supports up to 10 slots per enrolled process, each with an independent
 journal and task worktree under the connector runtime directory. The bare repository

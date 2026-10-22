@@ -5,7 +5,7 @@ This is a checklist to execute, not a claim that these checks have already passe
 ## Before connecting real tools
 
 - Run connector tests and TypeScript checking with the committed package lock.
-- Resolve/commit the platform lockfile, run migrations and the complete `mix test`.
+- Verify dependencies with the committed `platform/mix.lock`, run migrations and the complete `mix test`.
 - Register two accounts, verify email, and prove neither can open the other's IDs.
 - Exercise login, logout, password reset and the authenticated LiveView routes.
 - Check the UI at 320px, 768px, 1024px and 1440px, including keyboard navigation.
@@ -16,6 +16,14 @@ This is a checklist to execute, not a claim that these checks have already passe
   worktrees/journals and project concurrency backpressure.
 - Interrupt networking mid-task; confirm preserved files and reconciliation without
   an automatically duplicated task or PR.
+- Restart the connector with an active journal; confirm the same Codex thread and
+  worktree resume, and that a live lock is never removed.
+- Trigger missing context; verify exactly one Slack link, owner-only UI response,
+  answer delivery to the same Codex turn, expiration, and a blocked outcome when no
+  answer arrives.
+- Inspect `/api/v1/ready` with no executor, configured providers, queued work and
+  delivery incidents; confirm it distinguishes optional/degraded components without
+  returning tenant IDs, counts, tokens or provider error bodies.
 
 ## Authorized provider smoke test
 

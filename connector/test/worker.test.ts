@@ -4,7 +4,7 @@ import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, realpath } from "node:f
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Journal } from "../src/journal.ts";
-import { recover, emitDurably, execute } from "../src/worker.ts";
+import { recover, emitDurably, execute, waitForClarification } from "../src/worker.ts";
 import { execFileSync } from "node:child_process";
 import { RepositoryWorkspace } from "../src/repository.ts";
 import { Publisher } from "../src/publisher.ts";
@@ -51,6 +51,26 @@ test("an active journal with a Codex thread resumes without clearing its worktre
     assert.deepEqual(recovered,{...state,lease:{...state.lease,expires_in_ms:90_000}});
     assert.deepEqual(await journal.load(),{...state,lease:{...state.lease,expires_in_ms:90_000}});
   } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("clarification waits for the persisted answer and returns Codex's response shape",async()=>{
+  const lease={id:"run-clarify",generation:3,lifecycle:1};
+  const paths:string[]=[];
+  const answer={answers:{framework:{answers:["Phoenix"]}}};
+  const result=await waitForClarification({post:async(path:string,payload:any)=>{
+    paths.push(path);
+    assert.deepEqual(payload.lease,lease);
+    if(path.endsWith("/request"))return {id:"clarification-1",status:"open"};
+    return {status:"answered",answer};
+  }},lease,{turnId:"turn-1",questions:[{id:"framework",question:"Which framework?"}]},undefined,0);
+  assert.deepEqual(result,{response:answer,expired:false});
+  assert.deepEqual(paths,["/executor/clarifications/request","/executor/clarifications/status"]);
+});
+
+test("clarification timeout resolves with no answers instead of inventing context",async()=>{
+  const lease={id:"run-clarify-timeout",generation:1,lifecycle:1};
+  const result=await waitForClarification({post:async()=>({status:"expired"})},lease,{questions:[]});
+  assert.deepEqual(result,{response:{answers:{}},expired:true});
 });
 
 test("the worker bootstraps a repo, runs Codex, publishes a PR and keeps credentials out of the agent",async()=>{

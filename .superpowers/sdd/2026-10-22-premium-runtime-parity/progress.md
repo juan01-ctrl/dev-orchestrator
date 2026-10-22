@@ -61,10 +61,15 @@
 - Added same-thread recovery: the connector journals the Codex thread ID, workspace, and baseline; the server renews only a live, generation-fenced lease; restart resumes the existing app-server thread and retained worktree instead of claiming/re-running a new task. Resume events avoid replaying the initial task lifecycle.
 - Added race-guarded lock recovery with PID liveness checks, legacy PID-lock compatibility, lock-file safety checks, and ownership-aware release. Active, malformed, and unsafe locks fail closed; stale locks can recover automatically.
 - Connector verification after recovery/lock changes: `npm run check` passed; `npm test` passed 47/47. Offline platform harness passed 36/36. Full `mise exec -- mix test` remains blocked before ExUnit because Mix.PubSub cannot open a local TCP socket (`:eperm`).
-- Still outstanding: interactive durable clarification and response delivery; full DB-backed server verification and crash-boundary/duplicate-publication scenarios.
+- Durable clarification is implemented: generation-fenced requests, owner-only web response, Slack notification with a link to the run page, expiration, and same-thread app-server resume. Connector checks/tests passed 49/49; clarification contract tests passed 3/3; offline platform suite passed 37/37.
+- Still outstanding: full DB-backed server verification and crash-boundary/duplicate-publication scenarios. Mix test remains blocked before ExUnit by the sandbox TCP socket restriction.
 
 ## Task 7
 
 - Partial: final report delivery now drains concurrently with bounded workers; known provider rejections receive durable 5s/30s/120s/600s backoff and then dead-letter. Unknown send outcomes remain `ambiguous` and are not resent automatically.
 - Added migration `20261024000000_harden_outbox_retries.exs` and updated deployment/protocol/security/evaluation docs for model/network policy and connector slot capacity.
 - Offline platform suite: 36 tests, 0 failures. Full delivery/PostgreSQL integration tests are still blocked by the local Mix socket restriction.
+- Added privacy-safe `/api/v1/ready` component states for database, optional providers, live executor presence, queued tasks, intake backlog/failures, and delivery backlog/incidents. The health controller integration test is written but cannot execute until Mix starts in a normal environment.
+- Added low-cardinality telemetry for Linear webhook acceptance/reconciliation, executor heartbeats, run-lease queue wait, accepted run events (including turn-completion and publication event kinds), and report delivery duration/attempt/outcome. Metadata deliberately excludes tenant, issue, and credential data.
+- Fresh checks: connector `npm run check && npm test` → 49 passed; offline platform suite → 37 passed; clarification contract tests → 3 passed; 20 changed/new Elixir files parse; `git diff --check` passes. Full Mix tests and plugin-backed formatting remain unverified because Mix cannot open the local PubSub TCP socket (`:eperm`).
+- Task 7 remains partial: executor slot-capacity gauges, full database-backed delivery/operations tests, and owner-authorized provider acceptance scenarios remain outstanding.

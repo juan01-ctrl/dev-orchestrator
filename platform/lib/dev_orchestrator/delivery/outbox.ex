@@ -29,6 +29,32 @@ defmodule DevOrchestrator.Delivery.Outbox do
     :ok
   end
 
+  def enqueue_clarification(run, clarification) do
+    payload = %{
+      "title" => run["title"],
+      "run_id" => run["id"],
+      "clarification_id" => clarification["id"],
+      "questions" => clarification["questions"],
+      "snapshot" => run["snapshot"] || %{},
+      "url" => Application.fetch_env!(:dev_orchestrator, :public_url) <> "/app/runs/" <> run["id"]
+    }
+
+    Store.exec(
+      "INSERT INTO outbox(id,organization_id,project_id,run_id,lifecycle,kind,payload) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(run_id,lifecycle,kind) DO NOTHING",
+      [
+        Store.id(),
+        run["organization_id"],
+        run["project_id"],
+        run["id"],
+        run["lifecycle"],
+        "slack:clarification:" <> clarification["id"],
+        payload
+      ]
+    )
+
+    :ok
+  end
+
   def claim do
     Store.transaction(fn ->
       # A prior worker may have sent the Slack request before it stopped.

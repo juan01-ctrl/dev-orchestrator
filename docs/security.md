@@ -35,6 +35,11 @@ technical feasibility.
 - Durable fencing and sequence checks reject stale or duplicate run events.
   Executor revocation/cancellation takes effect on the next lease check; it does
   not magically undo an already-started external operation.
+- Clarification requests are tenant-, project-, lifecycle- and generation-scoped,
+  idempotent, bounded and expire after 20 minutes. Only the organization owner can
+  answer from the authenticated run page. Secret-input requests are rejected, and
+  question/answer text is redacted before storage and delivery. Slack sends a scoped
+  link to the run page; the message itself does not accept or store the answer.
 
 ## Limits requiring review before public rollout
 
@@ -46,10 +51,11 @@ organization-switching UI are intentionally deferred.
 
 The connector supports 1–10 local task slots via `DEV_ORCHESTRATOR_SLOTS` (default
 1). Each slot has its own journal and task checkout; project concurrency and
-executor binding still cap effective parallelism. It preserves a PID lock after
-an unclean stop; only remove that exact lock after confirming no executor process
-is still using the credential. Do not copy a paired configuration across machines.
-Use distinct executor enrollments for distinct machines.
+executor binding still cap effective parallelism. Its owner-only PID lock refuses
+recovery while the recorded process is alive and uses a separate lock to coordinate
+recovery of a stale lock; malformed or unsafe locks fail closed. Do not copy a paired
+configuration across machines. Use distinct executor enrollments for distinct
+machines.
 
 The model provider receives task context, including source. Sanitized control-plane
 metadata can also contain repository names and issue titles. No blanket claim of

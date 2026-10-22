@@ -66,6 +66,56 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     refute render(view) =~ "private command output"
   end
 
+  test "run details present an open clarification with owner response fields" do
+    scope = owner("clarification-live@example.test")
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "Context", "repository" => "acme/context"})
+
+    {:ok, run} =
+      DevOrchestrator.Runs.create(scope, project.id, %{
+        "title" => "Build a feature",
+        "prompt" => "Implement"
+      })
+
+    {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
+
+    {:ok, %{token: executor_token}} =
+      DevOrchestrator.Executors.enroll(code, %{"name" => "Context runner"})
+
+    {:ok, executor} = DevOrchestrator.Executors.authenticate(executor_token)
+    :ok = DevOrchestrator.Executors.bind(scope, executor["id"], project.id)
+    {:ok, lease} = DevOrchestrator.Runs.claim(executor)
+
+    {:ok, _} =
+      DevOrchestrator.Runs.append_event(executor, lease, %{
+        "sequence" => 1,
+        "kind" => "started",
+        "data" => %{}
+      })
+
+    {:ok, %{id: _id}} =
+      DevOrchestrator.Runs.request_clarification(executor, lease, %{
+        "turnId" => "turn-1",
+        "questions" => [
+          %{
+            "id" => "framework",
+            "header" => "Framework",
+            "question" => "Which framework should the project use?"
+          }
+        ]
+      })
+
+    {:ok, session_token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: session_token})
+    {:ok, _view, html} = live(conn, "/app/runs/" <> run["id"])
+
+    assert html =~ "Additional context"
+    assert html =~ "Which framework should the project use?"
+    assert html =~ "Send context"
+    assert html =~ "answers[framework]"
+  end
+
   test "accepted run events broadcast after persistence to an authorized subscriber" do
     scope = owner("activity-stream@example.test")
 

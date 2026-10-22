@@ -2,6 +2,7 @@ defmodule DevOrchestrator.Runs do
   alias DevOrchestrator.{Store, Projects, Accounts}
   alias DevOrchestrator.Connections.{GitHub, OAuth}
   alias DevOrchestrator.Runs.FailureBudget
+  alias DevOrchestrator.Runs.Clarification
 
   def list(scope),
     do:
@@ -26,6 +27,159 @@ defmodule DevOrchestrator.Runs do
         "SELECT kind,data,created_at FROM (SELECT kind,data,created_at,sequence FROM run_events WHERE run_id=$1 AND organization_id=$2 ORDER BY created_at DESC,sequence DESC LIMIT 200) recent ORDER BY created_at,sequence",
         [id, scope.organization_id]
       )
+
+  def clarifications(scope, id) do
+    with {:ok, _run} <- get(scope, id) do
+      rows =
+        Store.rows(
+          "SELECT c.id,CASE WHEN c.status='open' AND (c.expires_at<=now() OR r.state NOT IN ('running','leased','waiting_for_executor')) THEN 'expired' ELSE c.status END AS status,c.questions,c.answer,c.created_at FROM run_clarifications c JOIN runs r ON r.id=c.run_id AND r.organization_id=c.organization_id WHERE c.run_id=$1 AND c.organization_id=$2 ORDER BY c.created_at DESC LIMIT 10",
+          [id, scope.organization_id]
+        )
+
+      {:ok, rows}
+    end
+  end
+
+  def request_clarification(executor, lease, params) when is_map(params) do
+    result =
+      Store.transaction(fn ->
+        run = leased_run!(executor, lease)
+
+        questions =
+          case Clarification.normalize_questions(params) do
+            {:ok, normalized} -> normalized
+            {:error, reason} -> Store.halt(reason)
+          end
+
+        turn_id = params["turnId"] || params["turn_id"] || ""
+
+        request_key =
+          :crypto.hash(:sha256, Jason.encode!([turn_id, questions]))
+          |> Base.encode16(case: :lower)
+
+        existing =
+          Store.one(
+            "SELECT * FROM run_clarifications WHERE run_id=$1 AND lifecycle=$2 AND generation=$3 AND request_key=$4",
+            [run["id"], run["lifecycle"], run["generation"], request_key]
+          )
+
+        if existing do
+          clarification_response(existing)
+        else
+          Store.exec(
+            "UPDATE run_clarifications SET status='expired' WHERE run_id=$1 AND lifecycle=$2 AND generation=$3 AND status='open' AND expires_at<=now()",
+            [run["id"], run["lifecycle"], run["generation"]]
+          )
+
+          if Store.one(
+               "SELECT id FROM run_clarifications WHERE run_id=$1 AND lifecycle=$2 AND generation=$3 AND status='open'",
+               [run["id"], run["lifecycle"], run["generation"]]
+             ),
+             do: Store.halt(:clarification_already_open)
+
+          clarification =
+            Store.one(
+              "INSERT INTO run_clarifications(id,organization_id,project_id,run_id,lifecycle,generation,request_key,questions,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '20 minutes') RETURNING *",
+              [
+                Store.id(),
+                run["organization_id"],
+                run["project_id"],
+                run["id"],
+                run["lifecycle"],
+                run["generation"],
+                request_key,
+                questions
+              ]
+            )
+
+          DevOrchestrator.Delivery.Outbox.enqueue_clarification(run, clarification)
+          clarification_response(clarification)
+        end
+      end)
+
+    broadcast_clarification(lease["id"], result)
+    result
+  end
+
+  def request_clarification(_, _, _), do: {:error, :invalid_clarification}
+
+  def clarification_status(executor, lease, id) when is_binary(id) do
+    Store.transaction(fn ->
+      run = leased_run!(executor, lease)
+
+      clarification =
+        Store.one(
+          "SELECT * FROM run_clarifications WHERE id=$1 AND run_id=$2 AND organization_id=$3 AND lifecycle=$4 AND generation=$5 FOR UPDATE",
+          [id, run["id"], run["organization_id"], run["lifecycle"], run["generation"]]
+        ) || Store.halt(:clarification_not_found)
+
+      if clarification["status"] == "open" and
+           DateTime.compare(clarification["expires_at"], DateTime.utc_now()) != :gt do
+        Store.exec("UPDATE run_clarifications SET status='expired' WHERE id=$1", [id])
+        %{status: "expired"}
+      else
+        clarification_response(clarification)
+      end
+    end)
+  end
+
+  def clarification_status(_, _, _), do: {:error, :clarification_not_found}
+
+  def answer_clarification(scope, id, params) when is_binary(id) and is_map(params) do
+    result =
+      with true <- Accounts.owner?(scope),
+           {:ok, row} <-
+             Store.transaction(fn ->
+               run =
+                 Store.one(
+                   "SELECT id,state FROM runs WHERE id=(SELECT run_id FROM run_clarifications WHERE id=$1 AND organization_id=$2) AND organization_id=$2 FOR UPDATE",
+                   [id, scope.organization_id]
+                 ) || Store.halt(:clarification_not_found)
+
+               clarification =
+                 Store.one(
+                   "SELECT * FROM run_clarifications WHERE id=$1 AND organization_id=$2 AND run_id=$3 FOR UPDATE",
+                   [id, scope.organization_id, run["id"]]
+                 ) || Store.halt(:clarification_not_found)
+
+               if clarification["status"] != "open" or
+                    run["state"] not in ["running", "leased", "waiting_for_executor"],
+                  do: Store.halt(:clarification_not_open)
+
+               if DateTime.compare(clarification["expires_at"], DateTime.utc_now()) != :gt do
+                 Store.halt(:clarification_expired)
+               end
+
+               answer =
+                 case Clarification.normalize_answers(
+                        clarification["questions"],
+                        params["answers"]
+                      ) do
+                   {:ok, normalized} -> normalized
+                   {:error, reason} -> Store.halt(reason)
+                 end
+
+               Store.one(
+                 "UPDATE run_clarifications SET status='answered',answer=$2,answered_at=now() WHERE id=$1 RETURNING run_id",
+                 [id, answer]
+               )
+             end) do
+        Phoenix.PubSub.broadcast(
+          DevOrchestrator.PubSub,
+          "run:" <> row["run_id"],
+          {:run_updated, row["run_id"]}
+        )
+
+        :ok
+      else
+        false -> {:error, :forbidden}
+        error -> error
+      end
+
+    result
+  end
+
+  def answer_clarification(_, _, _), do: {:error, :invalid_clarification_answer}
 
   def subscribe(scope, id) do
     with {:ok, _run} <- get(scope, id) do
@@ -61,43 +215,68 @@ defmodule DevOrchestrator.Runs do
   end
 
   def claim(executor) do
-    Store.transaction(fn ->
-      live_executor!(executor)
-      expire_leases()
+    result =
+      Store.transaction(fn ->
+        live_executor!(executor)
+        expire_leases()
 
-      project =
-        Store.one(
-          """
-            SELECT p.* FROM projects p JOIN executor_bindings b ON b.project_id=p.id AND b.organization_id=p.organization_id
-            WHERE b.executor_id=$1 AND b.organization_id=$2
-            AND EXISTS(SELECT 1 FROM runs r WHERE r.project_id=p.id AND r.state='queued')
-            AND (SELECT count(*) FROM runs r WHERE r.project_id=p.id AND r.state IN ('leased','running','waiting_for_executor'))<p.concurrency
-            ORDER BY p.created_at FOR UPDATE OF p SKIP LOCKED LIMIT 1
-          """,
-          [executor["id"], executor["organization_id"]]
+        project =
+          Store.one(
+            """
+              SELECT p.* FROM projects p JOIN executor_bindings b ON b.project_id=p.id AND b.organization_id=p.organization_id
+              WHERE b.executor_id=$1 AND b.organization_id=$2
+              AND EXISTS(SELECT 1 FROM runs r WHERE r.project_id=p.id AND r.state='queued')
+              AND (SELECT count(*) FROM runs r WHERE r.project_id=p.id AND r.state IN ('leased','running','waiting_for_executor'))<p.concurrency
+              ORDER BY p.created_at FOR UPDATE OF p SKIP LOCKED LIMIT 1
+            """,
+            [executor["id"], executor["organization_id"]]
+          )
+
+        if project do
+          run =
+            Store.one(
+              "SELECT * FROM runs WHERE project_id=$1 AND organization_id=$2 AND state='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",
+              [project["id"], executor["organization_id"]]
+            )
+
+          if run do
+            snapshot =
+              Projects.snapshot(%{data: project})
+              |> Map.put("execution_policy", DevOrchestrator.ExecutionPolicy.for_task(project, run))
+
+            leased =
+              Store.one(
+                "UPDATE runs SET executor_id=$2,state='leased',generation=generation+1,sequence=0,snapshot=$3,lease_expires_at=now()+interval '90 seconds',updated_at=now() WHERE id=$1 RETURNING *",
+                [run["id"], executor["id"], snapshot]
+              )
+
+            {:claimed, lease_payload(leased), queue_wait_ms(run["created_at"])}
+          end
+        end
+      end)
+
+    case result do
+      {:ok, {:claimed, lease, wait_ms}} ->
+        :telemetry.execute(
+          [:dev_orchestrator, :runs, :lease],
+          %{count: 1, queue_wait_ms: wait_ms},
+          %{outcome: "claimed"}
         )
 
-      if project do
-        run =
-          Store.one(
-            "SELECT * FROM runs WHERE project_id=$1 AND organization_id=$2 AND state='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",
-            [project["id"], executor["organization_id"]]
-          )
+        {:ok, lease}
 
-        if run do
-          snapshot =
-            Projects.snapshot(%{data: project})
-            |> Map.put("execution_policy", DevOrchestrator.ExecutionPolicy.for_task(project, run))
+      {:ok, nil} ->
+        :telemetry.execute([:dev_orchestrator, :runs, :lease], %{count: 1}, %{outcome: "empty"})
+        {:ok, nil}
 
-          Store.one(
-            "UPDATE runs SET executor_id=$2,state='leased',generation=generation+1,sequence=0,snapshot=$3,lease_expires_at=now()+interval '90 seconds',updated_at=now() WHERE id=$1 RETURNING *",
-            [run["id"], executor["id"], snapshot]
-          )
-          |> lease_payload()
-        end
-      end
-    end)
+      {:error, _} = error ->
+        :telemetry.execute([:dev_orchestrator, :runs, :lease], %{count: 1}, %{outcome: "rejected"})
+        error
+    end
   end
+
+  defp queue_wait_ms(%DateTime{} = created_at),
+    do: max(DateTime.diff(DateTime.utc_now(), created_at, :millisecond), 0)
 
   def renew(executor, lease) do
     Store.transaction(fn ->
@@ -218,6 +397,12 @@ defmodule DevOrchestrator.Runs do
         end
       end)
 
+    :telemetry.execute(
+      [:dev_orchestrator, :runs, :event],
+      %{count: 1},
+      %{kind: kind, outcome: event_outcome(result)}
+    )
+
     case result do
       {:ok, :duplicate} ->
         result
@@ -237,6 +422,10 @@ defmodule DevOrchestrator.Runs do
   end
 
   def append_event(_, _, _), do: {:error, :invalid_event}
+
+  defp event_outcome({:ok, :duplicate}), do: "duplicate"
+  defp event_outcome({:ok, _}), do: "accepted"
+  defp event_outcome(_), do: "rejected"
 
   def reconcile(executor, lease, journal) do
     Store.transaction(fn ->
@@ -416,6 +605,19 @@ defmodule DevOrchestrator.Runs do
   end
 
   defp resumable_thread_id?(_), do: false
+
+  defp clarification_response(row),
+    do: %{id: row["id"], status: row["status"], answer: row["answer"]}
+
+  defp broadcast_clarification(run_id, {:ok, _}) do
+    Phoenix.PubSub.broadcast(
+      DevOrchestrator.PubSub,
+      "run:" <> run_id,
+      {:run_updated, run_id}
+    )
+  end
+
+  defp broadcast_clarification(_, _), do: :ok
 
   defp finish(run, state, result) do
     Store.exec(

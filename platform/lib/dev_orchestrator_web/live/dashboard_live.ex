@@ -17,7 +17,8 @@ defmodule DevOrchestratorWeb.DashboardLive do
        slack_channels: [],
        slack_connected: false,
        slack_channel_message: nil,
-       subscribed_run_id: nil
+       subscribed_run_id: nil,
+       clarifications: []
      )
      |> allow_upload(:instructions,
        accept: ~w(.md),
@@ -168,6 +169,27 @@ defmodule DevOrchestratorWeb.DashboardLive do
         "Cancellation recorded. The executor stops on lease renewal."
       )
 
+  defp dispatch("answer_clarification", %{"id" => id, "answers" => answers}, socket) do
+    case Runs.answer_clarification(socket.assigns.scope, id, %{"answers" => answers}) do
+      :ok ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Context sent. The task will continue from its current Codex thread."
+         )
+         |> refresh()}
+
+      _ ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "The context request is no longer open or the answers are incomplete."
+         )}
+    end
+  end
+
   defp dispatch(_, _, socket), do: {:noreply, socket}
 
   defp consume_instructions(socket, requirement) do
@@ -249,7 +271,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
           selected_run: run,
           deliveries:
             if(run, do: DevOrchestrator.Delivery.Outbox.list(scope, run["id"]), else: []),
-          events: if(run, do: Runs.events(scope, run["id"]), else: [])
+          events: if(run, do: Runs.events(scope, run["id"]), else: []),
+          clarifications:
+            if(run,
+              do:
+                case Runs.clarifications(scope, run["id"]) do
+                  {:ok, values} -> values
+                  _ -> []
+                end,
+              else: []
+            )
         )
 
       _ ->
@@ -816,6 +847,43 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <p :if={@events == []} class="activity-empty muted" role="status">
               Waiting for the local executor to report its first update…
             </p>
+          </section>
+          <section :if={@clarifications != []} class="panel">
+            <h2>Additional context</h2>
+            <article :for={clarification <- @clarifications} class="connection-row">
+              <div>
+                <span class="badge">{humanize(clarification["status"])}</span>
+                <p :for={question <- clarification["questions"]} class="fine">
+                  <strong>{question["header"]}:</strong> {question["question"]}
+                  <span :if={question["options"] != []} class="fine muted">
+                    Options: {Enum.map_join(question["options"], ", ", & &1["label"])}
+                  </span>
+                </p>
+                <p :if={clarification["status"] == "answered"} class="fine muted">
+                  Answer submitted. The executor will continue this task.
+                </p>
+              </div>
+              <form
+                :if={clarification["status"] == "open" and @scope.role == "owner"}
+                phx-submit="answer_clarification"
+                phx-value-id={clarification["id"]}
+              >
+                <label :for={question <- clarification["questions"]}>
+                  {question["header"]}
+                  <input
+                    type="text"
+                    name={"answers[" <> question["id"] <> "]"}
+                    maxlength="2000"
+                    required
+                    placeholder="Add the missing context"
+                  />
+                </label>
+                <button type="submit">Send context</button>
+              </form>
+              <p :if={clarification["status"] == "expired"} class="fine muted">
+                This request expired or the run ended before context was supplied. Check the run result for next steps.
+              </p>
+            </article>
           </section>
           <section :if={@deliveries != []} class="panel">
             <h2>Report delivery</h2>

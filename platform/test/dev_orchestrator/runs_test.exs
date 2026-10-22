@@ -107,8 +107,11 @@ defmodule DevOrchestrator.RunsTest do
   end
 
   test "reconciles an active Codex thread without converting it into a blocker", ctx do
-    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Resume", "prompt" => "Continue"})
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Resume", "prompt" => "Continue"})
+
     {:ok, lease} = Runs.claim(ctx.executor)
+
     assert {:ok, %{state: "running"}} =
              Runs.append_event(ctx.executor, lease, %{
                "sequence" => 1,
@@ -126,8 +129,11 @@ defmodule DevOrchestrator.RunsTest do
   end
 
   test "does not resume an active run without a valid Codex thread", ctx do
-    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "No thread", "prompt" => "Continue"})
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "No thread", "prompt" => "Continue"})
+
     {:ok, lease} = Runs.claim(ctx.executor)
+
     assert {:ok, %{state: "running"}} =
              Runs.append_event(ctx.executor, lease, %{
                "sequence" => 1,
@@ -137,6 +143,70 @@ defmodule DevOrchestrator.RunsTest do
 
     assert {:ok, %{action: "acknowledge", state: "blocked"}} =
              Runs.reconcile(ctx.executor, lease, %{"pending_event" => nil, "thread_id" => ""})
+  end
+
+  test "persists one clarification, notifies delivery, and returns the owner's answer", ctx do
+    {:ok, run} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Choose stack", "prompt" => "Build it"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    request = %{
+      "turnId" => "turn-1",
+      "questions" => [
+        %{"id" => "framework", "header" => "Framework", "question" => "Which framework?"}
+      ]
+    }
+
+    assert {:ok, %{id: clarification_id, status: "open"}} =
+             Runs.request_clarification(ctx.executor, lease, request)
+
+    assert {:ok, %{id: ^clarification_id, status: "open"}} =
+             Runs.request_clarification(ctx.executor, lease, request)
+
+    assert [%{"kind" => delivery_kind, "state" => "pending"}] =
+             DevOrchestrator.Delivery.Outbox.list(ctx.scope, run["id"])
+
+    assert delivery_kind == "slack:clarification:" <> clarification_id
+
+    assert :ok =
+             Runs.answer_clarification(ctx.scope, clarification_id, %{
+               "answers" => %{"framework" => "Phoenix"}
+             })
+
+    assert {:ok,
+            %{
+              status: "answered",
+              answer: %{"answers" => %{"framework" => %{"answers" => ["Phoenix"]}}}
+            }} = Runs.clarification_status(ctx.executor, lease, clarification_id)
+  end
+
+  test "rejects secret clarification requests", ctx do
+    {:ok, _run} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Choose stack", "prompt" => "Build it"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:error, :invalid_clarification} =
+             Runs.request_clarification(ctx.executor, lease, %{
+               "questions" => [
+                 %{"id" => "secret", "question" => "What is the token?", "isSecret" => true}
+               ]
+             })
   end
 
   test "issues a scoped GitHub credential only for the executor's live project lease", ctx do
