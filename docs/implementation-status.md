@@ -1,5 +1,43 @@
 # Implementation checkpoint — October 19, 2026
 
+## Premium runtime parity — October 22, 2026
+
+This implementation is in the isolated worktree
+`/Users/juanierace/Documents/Projects/dev-orchestrator/.worktrees/premium-runtime-parity`
+on branch `feat/premium-runtime-parity`. It has not been pushed or deployed.
+
+Implemented locally in reviewable commits:
+
+- Persistent bidirectional Codex app-server sessions and redacted live activity.
+- Generic signed Linear webhook inbox, asynchronous issue processing and periodic
+  lifecycle reconciliation.
+- Immutable server-selected task model/effort policy and workspace-scoped permission
+  broker. Routine tasks select `gpt-6-luna`/low; planning, reviews, fixes, security
+  and investigation select `gpt-6.1-sol`/high. Project overrides are restricted to
+  the deployment-supported catalog.
+- Bounded exact-host network amendments only; arbitrary hosts and permission
+  expansion are denied. Network egress is not globally enabled.
+- Connector slots (1–10 via `DEV_ORCHESTRATOR_SLOTS`) with independent journals and
+  task worktrees; shared managed repository cache.
+- Concurrent final-report delivery with durable bounded retry for known provider
+  rejection and no automatic retry for ambiguous sends.
+
+Current verification:
+
+| Check | Result |
+|---|---|
+| Connector `npm run check && npm test` | 42 passed, 0 failed |
+| Platform offline harness | 36 passed, 0 failed; its known missing database-module compiler warnings remain |
+| Platform `mise exec -- mix test` | Blocked before ExUnit: Mix 1.19.5 cannot open its local PubSub TCP socket (`:eperm`) |
+| Platform `mix format --check-formatted` | Blocked because `phoenix_live_view` formatter dependency is not installed in this worktree |
+| Real Linear/Slack/GitHub/Codex smoke tests | Not run; no external task/message, PR, or deployment was initiated |
+
+Still incomplete before parity can be claimed: same-thread crash resume, durable
+Slack/UI clarification flow, stale-lock recovery, complete PostgreSQL/controller/
+LiveView integration coverage, production telemetry/readiness details, and the
+authorized provider end-to-end acceptance scenarios. The implementation must not
+be presented as fully verified or production-ready until these gates pass.
+
 ## Automatic repository bootstrap — October 21, 2026
 
 The connector now bootstraps the selected project repository directly from its
