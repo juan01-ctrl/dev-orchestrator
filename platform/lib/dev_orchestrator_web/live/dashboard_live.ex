@@ -595,19 +595,25 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 </span>
               </div>
               <p
-                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("github")}
+                :if={
+                  @scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("github")
+                }
                 class="fine muted"
               >
                 GitHub needs GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_APP_ID, GITHUB_APP_SLUG and GITHUB_PRIVATE_KEY_PATH on the server.
               </p>
               <p
-                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("linear")}
+                :if={
+                  @scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("linear")
+                }
                 class="fine muted"
               >
                 Linear needs LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET on the server.
               </p>
               <p
-                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("slack")}
+                :if={
+                  @scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("slack")
+                }
                 class="fine muted"
               >
                 Slack needs SLACK_CLIENT_ID and SLACK_CLIENT_SECRET on the server.
@@ -692,12 +698,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <h2>Authorize a project</h2>
             <label>
               Executor<select name="executor_id"><option
-                  :for={e <- @executors}
-                  :if={!e["revoked_at"]}
-                  value={e["id"]}
-                >{e["name"]}</option></select>
+                :for={e <- @executors}
+                :if={!e["revoked_at"]}
+                value={e["id"]}
+              >
+                {e["name"]}
+              </option></select>
             </label>
-            <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select></label><button>Authorize project</button>
+            <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>
+              {p.name}
+            </option></select></label><button>Authorize project</button>
             <p class="fine muted">
               {length(@bindings)} project bindings configured. The local allowlist is still required.
             </p>
@@ -713,7 +723,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
           <form :if={@projects != []} class="panel" phx-submit="create_run">
             <h2>New task</h2>
             <label>
-              Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select>
+              Project<select name="project_id"><option :for={p <- @projects} value={p.id}>
+                {p.name}
+              </option></select>
             </label>
             <.field name="title" label="Task title" required />
             <label>
@@ -729,7 +741,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
             description="Only verified delivery counts as success. Files and commits are preserved when work is interrupted."
           />
           <div class="delivery-rail">
-            <span class="badge">{humanize(@selected_run["state"])}</span><span>Attempt {@selected_run["generation"]}</span><span>Lifecycle {@selected_run["lifecycle"]}</span>
+            <span class="badge">{humanize(@selected_run["state"])}</span><span>Attempt {@selected_run[
+              "generation"
+            ]}</span><span>Lifecycle {@selected_run["lifecycle"]}</span>
           </div>
           <section :if={@selected_run["result"]} class="panel">
             <h2>Result</h2>
@@ -750,7 +764,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 <p class="eyebrow">Execution activity</p>
                 <h2>What’s happening</h2>
               </div>
-              <span class={if(@selected_run["state"] == "running", do: "activity-status is-live", else: "activity-status")} role="status" aria-live="polite">
+              <span
+                class={
+                  if(@selected_run["state"] == "running",
+                    do: "activity-status is-live",
+                    else: "activity-status"
+                  )
+                }
+                role="status"
+                aria-live="polite"
+              >
                 <span class="activity-status-dot" aria-hidden="true"></span>
                 {if @selected_run["state"] == "running", do: "Live", else: "Activity log"}
               </span>
@@ -758,11 +781,27 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <p class="fine muted activity-note">
               Updates as work progresses. Private reasoning and raw command output stay hidden.
             </p>
-            <ol :if={@events != []} class="activity-list" aria-live="polite" aria-relevant="additions text">
+            <ol
+              :if={@events != []}
+              class="activity-list"
+              aria-live="polite"
+              aria-relevant="additions text"
+            >
               <li
                 :for={{event, index} <- Enum.with_index(@events)}
-                class={["activity-item", if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "is-current", else: nil)]}
-                aria-current={if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "step", else: nil)}
+                class={[
+                  "activity-item",
+                  if(@selected_run["state"] == "running" and index == length(@events) - 1,
+                    do: "is-current",
+                    else: nil
+                  )
+                ]}
+                aria-current={
+                  if(@selected_run["state"] == "running" and index == length(@events) - 1,
+                    do: "step",
+                    else: nil
+                  )
+                }
               >
                 <span class="activity-marker" aria-hidden="true"></span>
                 <div class="activity-content">
