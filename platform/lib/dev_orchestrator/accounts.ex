@@ -33,7 +33,13 @@ defmodule DevOrchestrator.Accounts do
 
       case result do
         {:ok, {user, token}} ->
-          Notifier.account_link(email, "Verify your email", "/verify/" <> token)
+          Notifier.account_link(
+            email,
+            :account_verification,
+            "Verify your email",
+            "/verify/" <> token
+          )
+
           {:ok, user}
 
         error ->
@@ -133,7 +139,13 @@ defmodule DevOrchestrator.Accounts do
            String.downcase(String.trim(email))
          ]) do
       token = issue_token(user["id"], "reset", 1800)
-      Notifier.account_link(user["email"], "Reset your password", "/reset/" <> token)
+
+      Notifier.account_link(
+        user["email"],
+        :password_reset,
+        "Reset your password",
+        "/reset/" <> token
+      )
     end
 
     :ok

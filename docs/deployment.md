@@ -25,8 +25,8 @@ Required environment variables:
 | `POSTGRES_PASSWORD` | Unique database password supplied to the database service |
 | `SECRET_KEY_BASE` | At least 64 bytes of random session-signing/encryption material |
 | `CONNECTION_ENCRYPTION_KEY` | Base64-encoded 32 random bytes; back it up securely |
-| `SMTP_HOST`, `SMTP_PORT` | SMTP endpoint; default port 587 |
-| `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` | Account verification/reset delivery |
+| `RESEND_API_KEY` | Resend API key with permission to send email |
+| `MAIL_FROM` | Sender address on a verified Resend domain |
 
 Generate secrets locally using a password manager or your deployment's secret
 manager. Store them outside source control. Supply provider-app variables only
@@ -59,9 +59,8 @@ string as `DATABASE_URL` in Render.
 This is for a first hosted evaluation, not production: Render's free web
 instance sleeps after 15 minutes without inbound traffic, can restart, and has
 an ephemeral filesystem. The database is durable, but keep the GitHub App key
-as a Render secret file, never in the image or repository. Email is configured
-for SendGrid SMTP over port 2525 because Render's free tier blocks ports 25,
-465, and 587.
+as a Render secret file, never in the image or repository. Transactional email
+uses Resend's HTTPS API, so SMTP port restrictions do not apply.
 
 1. Push this repository to GitHub and create a Render Blueprint from it. Render
    reads the root `render.yaml` and asks for the values marked `sync: false`.
@@ -72,10 +71,10 @@ for SendGrid SMTP over port 2525 because Render's free tier blocks ports 25,
    `CONNECTION_ENCRYPTION_KEY` with `openssl rand -base64 32`; enter each value
    directly in Render, not in chat or source control. Back up the connection
    key securely because it encrypts stored provider credentials.
-4. For email, create a SendGrid API key and verify the sender address/domain.
-   The Blueprint sets host `smtp.sendgrid.net`, port `2525`, and username
-   `apikey`; enter the API key as `SMTP_PASSWORD` and the verified sender as
-   `MAIL_FROM`.
+4. For email, create a Resend API key with sending access and verify the domain
+   used by `MAIL_FROM`. Set `RESEND_API_KEY` and `MAIL_FROM` in the Render
+   service environment. Resend's free plan currently includes 3,000 emails per
+   month, capped at 100 per day.
 5. In Render's Secret Files, upload the GitHub App PEM as
    `/etc/secrets/github-app.pem`. Then add the GitHub, Linear, and Slack app
    credentials to the service environment. `render.yaml` includes placeholders
@@ -90,7 +89,7 @@ for SendGrid SMTP over port 2525 because Render's free tier blocks ports 25,
 7. Open the Render service URL, register the owner account, verify email, then
    connect provider accounts and pair a local executor using that public URL.
 
-Never commit populated environment files, OAuth secrets, SMTP API keys, or the
+Never commit populated environment files, OAuth secrets, Resend API keys, or the
 GitHub PEM. Render only prompts for `sync: false` values on initial Blueprint
 creation; add or rotate them later in the service's Environment page.
 

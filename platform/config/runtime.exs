@@ -25,14 +25,11 @@ if config_env() == :prod do
     server: true,
     check_origin: [URI.to_string(url)]
 
+  config :swoosh, :api_client, Swoosh.ApiClient.Req
+
   config :dev_orchestrator, DevOrchestrator.Mailer,
-    adapter: Swoosh.Adapters.SMTP,
-    relay: System.fetch_env!("SMTP_HOST"),
-    port: String.to_integer(System.get_env("SMTP_PORT", "587")),
-    username: System.fetch_env!("SMTP_USERNAME"),
-    password: System.fetch_env!("SMTP_PASSWORD"),
-    tls: :always,
-    auth: :always
+    adapter: Swoosh.Adapters.Resend,
+    api_key: System.fetch_env!("RESEND_API_KEY")
 end
 
 if config_env() == :dev do
@@ -46,7 +43,12 @@ if config_env() == :dev do
          )
 end
 
-config :dev_orchestrator, :mail_from, System.get_env("MAIL_FROM", "orchestrator@localhost")
+mail_from =
+  if config_env() == :prod,
+    do: System.fetch_env!("MAIL_FROM"),
+    else: System.get_env("MAIL_FROM", "orchestrator@localhost")
+
+config :dev_orchestrator, :mail_from, mail_from
 
 unless config_env() == :test do
   for {provider, prefix} <- [{:slack, "SLACK"}, {:linear, "LINEAR"}, {:github, "GITHUB"}] do
