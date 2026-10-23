@@ -46,6 +46,130 @@ defmodule DevOrchestrator.Connections.Linear do
     end
   end
 
+  def create_issue(token, project, draft)
+      when is_binary(token) and is_map(project) and is_map(draft) do
+    with {:ok, team, states} <- validate_team(token, project["linear_team"]),
+         {:ok, _linear_project} <-
+           validate_linear_project(token, project["linear_project"], team["id"]),
+         {:ok, state} <- select_active_state(states, project["active_states"] || []),
+         {:ok, normalized_draft} <- DevOrchestrator.Intake.TaskDraft.normalize(draft),
+         {:ok, title, description} <- issue_content(normalized_draft) do
+      create_issue_mutation(token, %{
+        "teamId" => team["id"],
+        "projectId" => project["linear_project"],
+        "stateId" => state["id"],
+        "title" => title,
+        "description" => description
+      })
+    end
+  end
+
+  def create_issue(_, _, _), do: {:error, :invalid_destination}
+
+  defp validate_team(token, team_id) when is_binary(team_id) and team_id != "" do
+    case query(
+           token,
+           "query Team($id: String!) { team(id: $id) { id states { nodes { id name } } } }",
+           %{"id" => team_id}
+         ) do
+      {:ok,
+       %{"data" => %{"team" => %{"id" => ^team_id, "states" => %{"nodes" => states}} = team}}}
+      when is_list(states) ->
+        {:ok, team, states}
+
+      {:error, _} = error ->
+        error
+
+      _ ->
+        {:error, :invalid_destination}
+    end
+  end
+
+  defp validate_team(_, _), do: {:error, :invalid_destination}
+
+  defp validate_linear_project(token, project_id, team_id)
+       when is_binary(project_id) and project_id != "" do
+    case query(
+           token,
+           "query Project($id: String!) { project(id: $id) { id teams { nodes { id } } } }",
+           %{"id" => project_id}
+         ) do
+      {:ok,
+       %{
+         "data" => %{
+           "project" => %{"id" => ^project_id, "teams" => %{"nodes" => teams}} = project
+         }
+       }}
+      when is_list(teams) ->
+        if Enum.any?(teams, &(&1["id"] == team_id)),
+          do: {:ok, project},
+          else: {:error, :invalid_destination}
+
+      {:error, _} = error ->
+        error
+
+      _ ->
+        {:error, :invalid_destination}
+    end
+  end
+
+  defp validate_linear_project(_, _, _), do: {:error, :invalid_destination}
+
+  defp select_active_state(states, configured) when is_list(configured) do
+    Enum.find_value(configured, {:error, :invalid_destination}, fn name ->
+      case Enum.find(states, &(&1["name"] == name and is_binary(&1["id"]))) do
+        nil -> nil
+        state -> {:ok, state}
+      end
+    end)
+  end
+
+  defp select_active_state(_, _), do: {:error, :invalid_destination}
+
+  defp issue_content(draft) do
+    title = draft["title"]
+    description = DevOrchestrator.Intake.TaskDraft.to_linear_markdown(draft)
+
+    if is_binary(title) and String.valid?(title) and String.length(title) in 1..255 and
+         String.valid?(description) and byte_size(description) <= 20_000 do
+      {:ok, title, description}
+    else
+      {:error, :invalid_draft}
+    end
+  end
+
+  defp create_issue_mutation(token, variables) do
+    mutation =
+      "mutation CreateIssue($teamId: String!, $projectId: String!, $stateId: String!, $title: String!, $description: String!) { issueCreate(input: {teamId: $teamId, projectId: $projectId, stateId: $stateId, title: $title, description: $description}) { success issue { id identifier url } } }"
+
+    case HTTP.request(:post, "https://api.linear.app/graphql",
+           headers: [{"authorization", "Bearer " <> token}],
+           json: %{query: mutation, variables: variables}
+         ) do
+      {:ok, %{"data" => %{"issueCreate" => %{"success" => true, "issue" => issue}}}}
+      when is_map(issue) ->
+        if is_binary(issue["id"]) and is_binary(issue["identifier"]) and is_binary(issue["url"]) do
+          {:ok, %{id: issue["id"], identifier: issue["identifier"], url: issue["url"]}}
+        else
+          {:error, :ambiguous}
+        end
+
+      {:ok, %{"data" => %{"issueCreate" => %{"success" => false}}}} ->
+        {:error, :provider_rejected}
+
+      {:error, reason} when reason in [:provider_authentication, :provider_rate_limit] ->
+        {:error, reason}
+
+      {:error, :provider_unavailable} ->
+        {:error, :ambiguous}
+
+      _ ->
+        {:error, :ambiguous}
+    end
+  rescue
+    _ -> {:error, :ambiguous}
+  end
+
   def download_file(token, source_url, opts \\ [])
 
   def download_file(token, source_url, opts) when is_binary(token) and is_binary(source_url) do

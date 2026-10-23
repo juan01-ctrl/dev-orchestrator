@@ -55,17 +55,25 @@ review state. Failed work remains visible without falsely marking the issue done
 ## Slack
 
 Register an OAuth Slack app with callback `PUBLIC_URL/connections/slack/callback`.
-Set `SLACK_CLIENT_ID` and `SLACK_CLIENT_SECRET`. The requested bot scopes are
-`chat:write`, `channels:read` and `groups:read`. Channel scopes are used only to
-show public and private channels the bot has joined; message history is never read.
-Socket Mode, interactive approval buttons and history access are not needed for
-this release's outbound final/blocker reports.
+Set `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET` and `SLACK_SIGNING_SECRET`. The bot
+requests `chat:write`, `channels:read`, `groups:read`, `app_mentions:read` and
+`files:read`. Channel scopes list channels the bot has joined; the added scopes
+receive explicit mentions and download attached files. The app does not read
+channel history. Configure both the Events API Request URL and Interactivity
+Request URL as `PUBLIC_URL/api/v1/webhooks/slack`, and subscribe to `app_mention`.
+Reconnect existing Slack grants after the new scopes are added.
 
 Connect the workspace from a project, invite the bot to the destination channel,
 then choose that channel from the project's report-channel selector and save the
 project rules. Only non-archived channels where the bot is already a member are
 listed. If an existing connection was installed before channel scopes were
-added, reconnect Slack to grant them. Revoking a local connection immediately
+added, reconnect Slack to grant them. A Slack channel is bound to exactly one
+platform project within its workspace. To create a task, mention the bot in that
+channel and attach one hosted audio file (`mp3`, `mp4`, `mpeg`, `mpga`, `m4a`,
+`wav` or `webm`, at most 25 MB). The bot transcribes and proposes a structured
+task in the thread; only the original requester can create it in the configured
+Linear project, and the confirmation expires after 24 hours. No Linear issue or
+execution is created before confirmation. Revoking a local connection immediately
 prevents the platform from using it; revoke the app at the provider as well to
 invalidate the provider-issued authorization itself.
 

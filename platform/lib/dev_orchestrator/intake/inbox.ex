@@ -47,8 +47,62 @@ defmodule DevOrchestrator.Intake.Inbox do
 
   def accept_linear(_, _), do: {:error, :invalid_payload}
 
+  def normalize_slack(raw_body) when is_binary(raw_body) do
+    cond do
+      byte_size(raw_body) not in 1..@max_body_bytes ->
+        {:error, :payload_too_large}
+
+      true ->
+        case Jason.decode(raw_body) do
+          {:ok, %{"event_id" => event_id} = payload}
+          when is_binary(event_id) and byte_size(event_id) in 1..200 ->
+            case DevOrchestrator.Intake.Slack.normalize_event(payload) do
+              {:ok, event} -> {:ok, event_id, event}
+              other -> other
+            end
+
+          {:ok, _} ->
+            {:error, :invalid_delivery}
+
+          {:error, _} ->
+            {:error, :invalid_payload}
+        end
+    end
+  end
+
+  def normalize_slack(_), do: {:error, :invalid_payload}
+
+  def accept_slack(raw_body) when is_binary(raw_body) do
+    result =
+      case normalize_slack(raw_body) do
+        {:ok, event_id, event} ->
+          case Store.one(
+                 "INSERT INTO webhook_inbox(id,provider,delivery_id,organization_external_id,event) VALUES($1,'slack',$2,$3,$4) ON CONFLICT(provider,delivery_id) DO NOTHING RETURNING id",
+                 [Store.id(), event_id, event["workspace_id"], event]
+               ) do
+            %{"id" => _} -> {:ok, :accepted}
+            nil -> {:ok, :duplicate}
+          end
+
+        {:ignore, _reason} ->
+          {:ok, :ignored}
+
+        {:error, _} = error ->
+          error
+      end
+
+    :telemetry.execute([:dev_orchestrator, :slack, :webhook], %{count: 1}, %{
+      outcome: webhook_outcome(result)
+    })
+
+    result
+  end
+
+  def accept_slack(_), do: {:error, :invalid_payload}
+
   defp webhook_outcome({:ok, :accepted}), do: "accepted"
   defp webhook_outcome({:ok, :duplicate}), do: "duplicate"
+  defp webhook_outcome({:ok, :ignored}), do: "ignored"
   defp webhook_outcome(_), do: "rejected"
 
   def claim do
@@ -98,7 +152,13 @@ defmodule DevOrchestrator.Intake.Inbox do
     end
   end
 
-  defp process(row) do
+  defp process(%{"provider" => "slack"} = row) do
+    {:ok, _} = DevOrchestrator.Intake.SlackDrafts.accept(row["event"])
+    complete(row["id"])
+    :processed
+  end
+
+  defp process(%{"provider" => "linear"} = row) do
     connections =
       Store.rows(
         "SELECT * FROM connections WHERE provider='linear' AND external_id=$1 AND revoked_at IS NULL ORDER BY created_at",
@@ -119,6 +179,8 @@ defmodule DevOrchestrator.Intake.Inbox do
         :retry
     end
   end
+
+  defp process(_row), do: :ignored
 
   defp process_connection(row, connection) do
     projects =

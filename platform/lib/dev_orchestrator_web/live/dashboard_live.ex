@@ -93,6 +93,18 @@ defmodule DevOrchestratorWeb.DashboardLive do
              |> put_flash(:info, "Project rules saved for future attempts.")
              |> refresh()}
 
+          {:error, :slack_channel_already_bound} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "That Slack channel is already connected to another project in this workspace."
+             )}
+
+          {:error, :slack_not_connected} ->
+            {:noreply,
+             put_flash(socket, :error, "Reconnect Slack before saving this channel binding.")}
+
           _ ->
             {:noreply,
              put_flash(socket, :error, "Project rules were not saved. Check the fields.")}

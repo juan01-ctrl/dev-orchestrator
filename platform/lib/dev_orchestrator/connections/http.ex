@@ -5,7 +5,10 @@ defmodule DevOrchestrator.Connections.HTTP do
     transport = Application.get_env(:dev_orchestrator, :provider_transport, &Req.request/1)
 
     transport.(
-      [method: method, url: url, redirect: false, retry: false, receive_timeout: 15_000] ++ opts
+      Keyword.merge(
+        [method: method, url: url, redirect: false, retry: false, receive_timeout: 15_000],
+        opts
+      )
     )
     |> case do
       {:ok, %{status: status, body: body}} when status in 200..299 -> {:ok, body}
@@ -21,7 +24,10 @@ defmodule DevOrchestrator.Connections.HTTP do
     transport = Application.get_env(:dev_orchestrator, :provider_transport, &Req.request/1)
 
     transport.(
-      [method: method, url: url, redirect: false, retry: false, receive_timeout: 15_000] ++ opts
+      Keyword.merge(
+        [method: method, url: url, redirect: false, retry: false, receive_timeout: 15_000],
+        opts
+      )
     )
     |> case do
       {:ok, %{status: status} = response} when status in 200..299 -> {:ok, response}

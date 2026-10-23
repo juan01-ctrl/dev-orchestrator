@@ -213,7 +213,7 @@ defmodule DevOrchestrator.Connections do
 
   def for_project(organization_id, project_id, provider) do
     Store.one(
-      "SELECT c.* FROM connections c JOIN connection_grants g ON g.connection_id=c.id AND g.organization_id=c.organization_id WHERE g.project_id=$1 AND g.organization_id=$2 AND c.provider=$3 AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1",
+      "SELECT c.* FROM connections c JOIN connection_grants g ON g.connection_id=c.id AND g.organization_id=c.organization_id WHERE g.project_id=$1 AND g.organization_id=$2 AND c.provider=$3 AND c.revoked_at IS NULL ORDER BY c.created_at DESC,c.id DESC LIMIT 1",
       [project_id, organization_id, provider]
     )
   end

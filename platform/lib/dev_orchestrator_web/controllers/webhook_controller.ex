@@ -4,6 +4,114 @@ defmodule DevOrchestratorWeb.WebhookController do
   require Logger
   alias DevOrchestrator.{Store, RateLimit}
   alias DevOrchestrator.Intake.{Signature, Linear}
+  alias DevOrchestrator.Connections.Slack
+
+  def receive_slack(conn, _params) do
+    raw = Map.get(conn.assigns, :raw_body, "")
+    signature = List.first(get_req_header(conn, "x-slack-signature"), "")
+    timestamp = List.first(get_req_header(conn, "x-slack-request-timestamp"), "")
+    secret = DevOrchestrator.Connections.OAuth.config("slack")[:signing_secret]
+
+    cond do
+      byte_size(raw) > 65_536 ->
+        conn |> put_status(413) |> json(%{error: "payload_too_large"})
+
+      not Signature.valid_slack?(raw, signature, timestamp, secret, System.system_time(:second)) ->
+        conn |> put_status(401) |> json(%{error: "invalid_webhook"})
+
+      RateLimit.check({:slack_webhook, conn.remote_ip}, 120) != :ok ->
+        conn |> put_status(429) |> json(%{error: "rate_limited"})
+
+      true ->
+        accept_slack_payload(conn, raw)
+    end
+  end
+
+  defp accept_slack_payload(conn, raw) do
+    case decode_slack_payload(raw) do
+      {:ok, %{"type" => "url_verification", "challenge" => challenge}}
+      when is_binary(challenge) and byte_size(challenge) <= 2_000 ->
+        json(conn, %{challenge: challenge})
+
+      {:ok, %{"type" => "event_callback"}} ->
+        case DevOrchestrator.Intake.Inbox.accept_slack(raw) do
+          {:ok, _result} ->
+            json(conn, %{accepted: true})
+
+          {:error, :payload_too_large} ->
+            conn |> put_status(413) |> json(%{error: "payload_too_large"})
+
+          {:error, _} ->
+            conn |> put_status(400) |> json(%{error: "invalid_webhook"})
+        end
+
+      {:ok, %{"type" => "block_actions"} = payload} ->
+        case Slack.normalize_action(payload) do
+          {:ok, action} -> acknowledge_action(conn, action)
+          _ -> json(conn, %{text: "This task button is no longer available."})
+        end
+
+      {:ok, _} ->
+        json(conn, %{accepted: true, ignored: true})
+
+      _ ->
+        conn |> put_status(400) |> json(%{error: "invalid_webhook"})
+    end
+  end
+
+  defp decode_slack_payload(raw) do
+    case Jason.decode(raw) do
+      {:ok, payload} ->
+        {:ok, payload}
+
+      _ ->
+        case URI.decode_query(raw)["payload"] do
+          payload when is_binary(payload) -> Jason.decode(payload)
+          _ -> {:error, :invalid_payload}
+        end
+    end
+  end
+
+  defp acknowledge_action(conn, %{"action_id" => "create_linear_task"} = action) do
+    case DevOrchestrator.Intake.SlackDrafts.confirm(action) do
+      {:ok, _} ->
+        json(conn, %{})
+
+      {:error, :forbidden} ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text: "Only the person who requested this task can confirm it."
+        })
+
+      {:error, :expired} ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text: "This task draft has expired. Please send a new request."
+        })
+
+      _ ->
+        json(conn, %{text: "This task button is no longer available."})
+    end
+  end
+
+  defp acknowledge_action(conn, %{"action_id" => "cancel_linear_task"} = action) do
+    case DevOrchestrator.Intake.SlackDrafts.cancel(action) do
+      {:ok, _} ->
+        json(conn, %{})
+
+      {:error, :forbidden} ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text: "Only the person who requested this task can cancel it."
+        })
+
+      {:error, :expired} ->
+        json(conn, %{response_type: "ephemeral", text: "This task draft has expired."})
+
+      _ ->
+        json(conn, %{text: "This task button is no longer available."})
+    end
+  end
 
   def receive_linear(conn, _params) do
     raw = Map.get(conn.assigns, :raw_body, "")

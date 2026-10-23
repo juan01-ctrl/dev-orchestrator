@@ -85,7 +85,9 @@ defmodule DevOrchestrator.IntakeAuthorizationTest do
     assert [] = Runs.list(restricted)
 
     stored =
-      Store.one("SELECT source_context FROM runs WHERE project_id=$1", [privileged_project.id])
+      Store.one("SELECT prompt,source_context FROM runs WHERE project_id=$1", [
+        privileged_project.id
+      ])
 
     assert stored["source_context"]["linear_connection_id"] == "connection-privileged"
     assert [asset] = stored["source_context"]["assets"]
@@ -105,7 +107,7 @@ defmodule DevOrchestrator.IntakeAuthorizationTest do
       "project" => nil
     }
 
-    assert %{result: :unchanged} =
+    assert {:ok, %{result: :unchanged, activation: 1}} =
              Lifecycle.apply_issue(privileged_project.data, updated_issue, %{
                "linear_connection_id" => "connection-privileged"
              })

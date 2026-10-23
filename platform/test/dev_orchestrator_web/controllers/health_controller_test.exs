@@ -17,6 +17,7 @@ defmodule DevOrchestratorWeb.HealthControllerTest do
            }
 
     assert components["executor"] == "waiting"
+    assert components["slack_audio_intake"] == "unconfigured"
     assert components["task_queue"] == "healthy"
     assert components["intake_queue"] == "healthy"
     assert components["delivery_queue"] == "healthy"

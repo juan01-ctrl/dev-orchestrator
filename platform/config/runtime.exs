@@ -87,4 +87,11 @@ unless config_env() == :test do
       private_key_path: System.get_env(prefix <> "_PRIVATE_KEY_PATH"),
       app_slug: System.get_env(prefix <> "_APP_SLUG")
   end
+
+  config :dev_orchestrator, :slack, signing_secret: System.get_env("SLACK_SIGNING_SECRET")
+
+  config :dev_orchestrator, :openai,
+    api_key: System.get_env("OPENAI_API_KEY"),
+    transcription_model: System.get_env("OPENAI_TRANSCRIPTION_MODEL", "gpt-transcribe"),
+    task_model: System.get_env("OPENAI_TASK_MODEL", "gpt-6-luna")
 end

@@ -27,6 +27,10 @@ Required environment variables:
 | `CONNECTION_ENCRYPTION_KEY` | Base64-encoded 32 random bytes; back it up securely |
 | `RESEND_API_KEY` | Resend API key with permission to send email |
 | `MAIL_FROM` | Sender address on a verified Resend domain |
+| `SLACK_SIGNING_SECRET` | Slack app signing secret, required for Slack webhooks |
+| `OPENAI_API_KEY` | OpenAI API key for audio transcription and task structuring |
+| `OPENAI_TRANSCRIPTION_MODEL` | Optional; defaults to `gpt-transcribe` |
+| `OPENAI_TASK_MODEL` | Optional; defaults to `gpt-6-luna` |
 
 Generate secrets locally using a password manager or your deployment's secret
 manager. Store them outside source control. Supply provider-app variables only
@@ -100,11 +104,15 @@ uses Resend's HTTPS API, so SMTP port restrictions do not apply.
    `/connections/github/callback`; GitHub App Setup URL:
    `/connections/github/install/callback`; Linear OAuth:
    `/connections/linear/callback`; Slack OAuth:
-   `/connections/slack/callback`. Configure Linear's webhook endpoint as
+   `/connections/slack/callback`. Configure Slack Events API and Interactivity
+   Request URLs as `/api/v1/webhooks/slack`, subscribe to `app_mention`, and
+   enable `app_mentions:read` and `files:read`. Configure Linear's webhook endpoint as
    `/api/v1/webhooks/linear/CONNECTION_ID` for each authorized connection, with
    the matching signing secret in `LINEAR_WEBHOOK_SECRET`.
 7. Open the Render service URL, register the owner account, verify email, then
    connect provider accounts and pair a local executor using that public URL.
+   Slack audio intake stays unavailable until both `SLACK_SIGNING_SECRET` and
+   `OPENAI_API_KEY` are configured; reconnect Slack after adding the new scopes.
 
 Never commit populated environment files, OAuth secrets, Resend API keys, or the
 GitHub PEM. Render only prompts for `sync: false` values on initial Blueprint
