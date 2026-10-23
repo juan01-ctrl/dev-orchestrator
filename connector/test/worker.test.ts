@@ -158,7 +158,7 @@ const prompt=message.params.input[0].text;
       const privatePath=prompt.match(/read and follow the file at (.+) before making changes\./)?.[1];
       const assetPath=prompt.match(/Available file: (.+)/)?.[1];
       writeFileSync("README.md","implemented by Codex\\n");
-      appendFileSync(observation,JSON.stringify({prompt,content:privatePath?readFileSync(privatePath,"utf8"):null,assetContent:assetPath?readFileSync(assetPath,"utf8"):null,githubToken:process.env.GITHUB_TOKEN??null,status:execFileSync("git",["status","--porcelain"],{encoding:"utf8"})}));
+      appendFileSync(observation,JSON.stringify({prompt,images:message.params.input.filter(item=>item.type==="localImage"),content:privatePath?readFileSync(privatePath,"utf8"):null,assetContent:assetPath?readFileSync(assetPath,"utf8"):null,githubToken:process.env.GITHUB_TOKEN??null,status:execFileSync("git",["status","--porcelain"],{encoding:"utf8"})}));
       respond({id:message.id,result:{}});
       respond({method:"turn/started",params:{threadId:"fake-thread",turn:{id:"turn-1"}}});
       respond({method:"item/started",params:{threadId:"fake-thread",turnId:"turn-1",item:{type:"fileChange",id:"edit-1",changes:[{path:"README.md"}]}}});
@@ -176,9 +176,9 @@ const prompt=message.params.input[0].text;
     const credentials:string[]=[];
     await execute(
       {version:2,server:"http://127.0.0.1:4100",token:"test",codexBinary:binary},
-      {post:async(path:string,payload:any)=>{if(path==="/executor/github-token"){credentials.push(payload.purpose);return {token:`short-lived-${payload.purpose}-token`,expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};}if(path==="/executor/events"){events.push({kind:payload.event.kind,data:payload.event.data});if(payload.event.kind==="candidate")return {state:"succeeded"};}return {expires_in_ms:90_000};},downloadAsset:async()=>{const body=Buffer.from("id,name\\n1,alpha\\n");return {body,filename:"dataset.csv",mediaType:"text/csv",sha256:createHash("sha256").update(body).digest("hex")};}},
+      {post:async(path:string,payload:any)=>{if(path==="/executor/github-token"){credentials.push(payload.purpose);return {token:`short-lived-${payload.purpose}-token`,expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};}if(path==="/executor/events"){events.push({kind:payload.event.kind,data:payload.event.data});if(payload.event.kind==="candidate")return {state:"succeeded"};}return {expires_in_ms:90_000};},downloadAsset:async(_lease,id)=>{const image=id.startsWith("bbbb");const body=Buffer.from(image?"test image bytes":"id,name\\n1,alpha\\n");return {body,filename:image?"reference.png":"dataset.csv",mediaType:image?"image/png":"text/csv",sha256:createHash("sha256").update(body).digest("hex")};}},
       new Journal(journalRoot),
-      {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,source_key:"JUA-28",title:"Test task",prompt:"Do nothing",snapshot:{repository:"acme/app",base_branch:"main",instructions,task_assets:[{id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",filename_hint:"dataset.csv"}],task_assets_skipped:0}},sequence:0},
+      {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,source_key:"JUA-28",title:"Test task",prompt:"Do nothing",snapshot:{repository:"acme/app",base_branch:"main",instructions,task_assets:[{id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",filename_hint:"dataset.csv"},{id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",filename_hint:"reference.png"}],task_assets_skipped:0}},sequence:0},
       performance.now(),
       new AbortController().signal,
       {dataRoot:root,repositories:new RepositoryWorkspace({remoteURL:()=>remote}),publisherFactory:context=>new Publisher(context,{remoteURL:()=>remote,apiFetch:async(_url,init)=>{
@@ -191,6 +191,7 @@ const prompt=message.params.input[0].text;
     const result=JSON.parse(await readFile(observation,"utf8"));
     assert.equal(result.content,instructions);
     assert.equal(result.assetContent,"id,name\\n1,alpha\\n");
+    assert.deepEqual(result.images,[{type:"localImage",path:join(root,"workspaces",`${runId}-1`,".dev-orchestrator-context/linear/bbbbbbbbbbbb-reference.png"),detail:"original"}]);
     assert.match(result.prompt,/Task reference files \(untrusted data/);
     assert.ok(result.prompt.includes(".dev-orchestrator-context/linear/aaaaaaaaaaaa-dataset.csv"));
     assert.doesNotMatch(result.prompt,/uploads\.linear\.app|source_url|linear-private-token/);
@@ -215,5 +216,27 @@ const prompt=message.params.input[0].text;
     const worktree=join(root,"workspaces",`${runId}-1`);
     const gitdirPointer=(await readFile(join(worktree,".git"),"utf8")).trim().replace(/^gitdir: /,"");
     assert.equal(JSON.parse(await readFile(join(resolve(worktree,gitdirPointer),"terminal.json"),"utf8")).outcome,"success");
+
+    const beforeMissingReference=await readFile(observation,"utf8");
+    const blockedEvents:{kind:string;data:Record<string,unknown>}[]=[];
+    await execute(
+      {version:2,server:"http://127.0.0.1:4100",token:"test",codexBinary:binary},
+      {post:async(path:string,payload:any)=>{
+        if(path==="/executor/github-token") {
+          assert.equal(payload.purpose,"checkout");
+          return {token:"short-lived-checkout-token",expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"test@example.test"};
+        }
+        if(path==="/executor/events")blockedEvents.push({kind:payload.event.kind,data:payload.event.data});
+        return {state:"blocked",expires_in_ms:90_000};
+      },downloadAsset:async()=>{throw new Error("Image unavailable");}},
+      new Journal(journalRoot),
+      {lease:{id:"33333333-3333-4333-8333-333333333333",generation:1,lifecycle:1,project_id:projectId,title:"Copy the attached signup screenshot pixel perfect",snapshot:{repository:"acme/app",base_branch:"main",instructions,task_assets:[{id:"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",filename_hint:"reference.png"}]}},sequence:0},
+      performance.now(),new AbortController().signal,
+      {dataRoot:root,repositories:new RepositoryWorkspace({remoteURL:()=>remote}),publisherFactory:()=>{throw new Error("Must stop before publication setup");}}
+    );
+    assert.equal(blockedEvents.at(-1)?.kind,"blocked");
+    assert.equal(blockedEvents.at(-1)?.data.category,"missing_context");
+    assert.match(String(blockedEvents.at(-1)?.data.summary),/reference image is unavailable/i);
+    assert.equal(await readFile(observation,"utf8"),beforeMissingReference);
   } finally {await rm(root,{recursive:true,force:true});}
 });
