@@ -38,7 +38,7 @@ const pullRequest=(sha:string)=>({
 test("trusted connector commits uncommitted task files without agent access to shared Git metadata",async()=>{
   const f=await fixture(false);
   try {
-    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline});
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir});
     assert.deepEqual(await publisher.changedFiles(),["change.txt"]);
     await assert.rejects(publisher.status(),/Uncommitted changes/);
     const result=await publisher.commit("JUA-28",credential);
@@ -48,6 +48,23 @@ test("trusted connector commits uncommitted task files without agent access to s
     assert.equal(f.git(f.workspace.path,["show","-s","--format=%s","HEAD"]),"chore: deliver JUA-28");
     assert.equal(f.git(f.workspace.path,["status","--porcelain"]),"");
     assert.equal((await publisher.status()).changed,true);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("every trusted ref update disables repository hooks",async()=>{
+  const f=await fixture(false);
+  try {
+    const calls:string[][]=[];
+    const runCommand:typeof command=async(binary,args,options={})=>{
+      calls.push(args);
+      return command(binary,args,options);
+    };
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{runCommand});
+    await publisher.commit("JUA-SECURITY",credential);
+    const refUpdate=calls.find(args=>args.includes("update-ref"));
+    assert.ok(refUpdate);
+    assert.deepEqual(refUpdate!.slice(0,3),["--git-dir",f.workspace.commonDir,"-c"]);
+    assert.ok(refUpdate!.includes("core.hooksPath=/dev/null"));
   } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
@@ -67,7 +84,7 @@ test("pushes with a temporary app credential and creates a verified PR without g
       if(init.method==="POST")return new Response(JSON.stringify(pullRequest(sha)),{status:201,headers:{"content-type":"application/json"}});
       return new Response("[]",{status:200,headers:{"content-type":"application/json"}});
     };
-    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline},{runCommand,apiFetch,remoteURL:()=>f.remote});
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{runCommand,apiFetch,remoteURL:()=>f.remote});
     const result=await publisher.publish("Task result","Summary",credential);
 
     assert.equal(result.pr_url,"https://github.com/acme/app/pull/17");
@@ -95,14 +112,14 @@ test("reuses a matching open PR and rejects a PR for a different commit",async()
       if(init.method==="POST"){posts++;return new Response("{}",{status:201,headers:{"content-type":"application/json"}});}
       return new Response(JSON.stringify([pullRequest(sha)]),{status:200,headers:{"content-type":"application/json"}});
     };
-    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline},{apiFetch,remoteURL:()=>f.remote});
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{apiFetch,remoteURL:()=>f.remote});
     await publisher.publish("Task result","Summary",credential);
     assert.equal(posts,0);
   } finally {await rm(f.root,{recursive:true,force:true});}
 
   const other=await fixture();
   try {
-    const publisher=new Publisher({workspace:other.workspace.path,repository:"acme/app",baseBranch:"main",branch:other.workspace.branch,baseline:other.workspace.baseline},{
+    const publisher=new Publisher({workspace:other.workspace.path,repository:"acme/app",baseBranch:"main",branch:other.workspace.branch,baseline:other.workspace.baseline,gitDir:other.workspace.gitDir,commonDir:other.workspace.commonDir},{
       apiFetch:async(_input,init={})=>init.method==="POST"
         ? new Response(JSON.stringify(pullRequest("0".repeat(40))),{status:201,headers:{"content-type":"application/json"}})
         : new Response("[]",{status:200,headers:{"content-type":"application/json"}}),

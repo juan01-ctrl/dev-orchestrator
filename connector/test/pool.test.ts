@@ -24,6 +24,18 @@ test("slots execute concurrently with isolated identifiers and shared cancellati
   await promise;
 });
 
+test("one failed slot is surfaced even while another slot is still polling", async () => {
+  const controller = new AbortController();
+  const pending = runSlots(2, controller.signal, async slot => {
+    if (slot === 1) throw new Error("slot startup failed");
+    await new Promise<void>(() => {});
+  });
+  await assert.rejects(Promise.race([
+    pending,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("slot failure was hidden")), 100))
+  ]), /slot startup failed/);
+});
+
 test("run pool creates each slot directory before starting Codex", async () => {
   const root = await mkdtemp(join(tmpdir(), "connector-slots-"));
   try {

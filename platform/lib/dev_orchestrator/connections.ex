@@ -233,30 +233,32 @@ defmodule DevOrchestrator.Connections do
   end
 
   def credential(row) do
-    Store.transaction(fn ->
-      current =
-        Store.one(
-          "SELECT * FROM connections WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL FOR UPDATE",
-          [row["id"], row["organization_id"]]
-        ) || Store.halt(:connection_unavailable)
+    loaded =
+      Store.transaction(fn ->
+        current =
+          Store.one(
+            "SELECT * FROM connections WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL FOR UPDATE",
+            [row["id"], row["organization_id"]]
+          ) || Store.halt(:connection_unavailable)
 
-      with {:ok, plaintext} <-
-             SecretBox.open(current["secret"], current["organization_id"], key()),
-           {:ok, secret} <- Jason.decode(plaintext) do
-        secret = refresh_if_expired(current, secret)
-
-        if current["provider"] == "github" do
-          case GitHub.token(secret) do
-            {:ok, token} -> token
-            {:error, reason} -> Store.halt(reason)
-          end
+        with {:ok, plaintext} <-
+               SecretBox.open(current["secret"], current["organization_id"], key()),
+             {:ok, secret} <- Jason.decode(plaintext) do
+          {current["provider"], refresh_if_expired(current, secret)}
         else
-          secret["access_token"] || Store.halt(:invalid_secret)
+          _ -> Store.halt(:invalid_secret)
         end
-      else
-        _ -> Store.halt(:invalid_secret)
-      end
-    end)
+      end)
+
+    case loaded do
+      {:ok, {"github", secret}} -> GitHub.token(secret)
+      {:ok, {_provider, secret}} ->
+        if is_binary(secret["access_token"]),
+          do: {:ok, secret["access_token"]},
+          else: {:error, :invalid_secret}
+
+      error -> error
+    end
   end
 
   defp refresh_if_expired(row, %{"expires_at" => expires} = secret) when is_integer(expires) do

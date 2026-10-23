@@ -169,6 +169,22 @@ defmodule DevOrchestratorWeb.DashboardLive do
         "Cancellation recorded. The executor stops on lease renewal."
       )
 
+  defp dispatch("retry_delivery", %{"id" => id}, socket),
+    do:
+      action(
+        socket,
+        DevOrchestrator.Delivery.Outbox.retry_failed(socket.assigns.scope, id),
+        "Report delivery queued again. Task execution was not restarted."
+      )
+
+  defp dispatch("acknowledge_delivery", %{"id" => id}, socket),
+    do:
+      action(
+        socket,
+        DevOrchestrator.Delivery.Outbox.acknowledge_ambiguous(socket.assigns.scope, id),
+        "Ambiguous delivery acknowledged without resending."
+      )
+
   defp dispatch("answer_clarification", %{"id" => id, "answers" => answers}, socket) do
     case Runs.answer_clarification(socket.assigns.scope, id, %{"answers" => answers}) do
       :ok ->
@@ -933,7 +949,27 @@ defmodule DevOrchestratorWeb.DashboardLive do
           <section :if={@deliveries != []} class="panel">
             <h2>Report delivery</h2>
             <div :for={d <- @deliveries} class="connection-row">
-              <span>{humanize(d["kind"])}</span><span class="badge">{humanize(d["state"])}</span>
+              <div>
+                <span>{humanize(d["kind"])}</span>
+                <p :if={d["last_error_category"]} class="fine muted">
+                  {humanize(d["last_error_category"])}
+                </p>
+              </div>
+              <div class="actions">
+                <span class="badge">{humanize(d["state"])}</span>
+                <button
+                  :if={@scope.role == "owner" and d["state"] == "failed"}
+                  phx-click="retry_delivery"
+                  phx-value-id={d["id"]}
+                  class="secondary"
+                >Retry report</button>
+                <button
+                  :if={@scope.role == "owner" and d["state"] == "ambiguous"}
+                  phx-click="acknowledge_delivery"
+                  phx-value-id={d["id"]}
+                  class="secondary"
+                >Mark delivered</button>
+              </div>
             </div>
           </section>
           <div :if={@scope.role == "owner"} class="actions">

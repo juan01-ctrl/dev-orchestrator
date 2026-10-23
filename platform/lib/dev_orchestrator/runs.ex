@@ -353,7 +353,18 @@ defmodule DevOrchestrator.Runs do
 
     installation =
       Store.one(
-        "SELECT installation_id FROM github_app_installations WHERE organization_id=$1 AND project_id=$2 AND repository=$3",
+        """
+        SELECT i.installation_id
+        FROM github_app_installations i
+        JOIN connection_grants g
+          ON g.organization_id=i.organization_id AND g.project_id=i.project_id
+        JOIN connections c
+          ON c.organization_id=g.organization_id AND c.id=g.connection_id
+        WHERE i.organization_id=$1 AND i.project_id=$2 AND i.repository=$3
+          AND c.provider='github' AND c.revoked_at IS NULL
+          AND c.external_id=i.installation_id::text
+        ORDER BY c.created_at DESC LIMIT 1
+        """,
         [executor["organization_id"], run["project_id"], repository]
       ) || Store.halt(:github_installation_required)
 
@@ -381,8 +392,26 @@ defmodule DevOrchestrator.Runs do
           if sequence != run["sequence"] + 1, do: Store.halt(:sequence_gap)
           if run["state"] not in ~w(leased running) or expired?(run), do: Store.halt(:stale_lease)
 
+          previous_text =
+            if kind == "activity" do
+              case Store.one(
+                     "SELECT data->'event'->>'text' AS text FROM run_events WHERE run_id=$1 AND lifecycle=$2 AND generation=$3 AND kind='activity' AND data->'event'->>'kind'='message_delta' ORDER BY sequence DESC LIMIT 1",
+                     [run["id"], run["lifecycle"], run["generation"]]
+                   ) do
+                %{"text" => text} when is_binary(text) -> text
+                _ -> ""
+              end
+            else
+              ""
+            end
+
           data =
-            case DevOrchestrator.Runs.Event.sanitize(run, kind, Map.get(event, "data", %{})) do
+            case DevOrchestrator.Runs.Event.sanitize(
+                   run,
+                   kind,
+                   Map.get(event, "data", %{}),
+                   previous_text
+                 ) do
               {:ok, safe} -> safe
               {:error, reason} -> Store.halt(reason)
             end
@@ -402,9 +431,10 @@ defmodule DevOrchestrator.Runs do
             sequence
           ])
 
-          transition(run, kind, data)
+          if kind == "candidate", do: {:verify_candidate, run, data}, else: transition(run, kind, data)
         end
       end)
+      |> finalize_candidate_event()
 
     :telemetry.execute(
       [:dev_orchestrator, :runs, :event],
@@ -432,6 +462,29 @@ defmodule DevOrchestrator.Runs do
 
   def append_event(_, _, _), do: {:error, :invalid_event}
 
+  defp finalize_candidate_event({:ok, {:verify_candidate, run, data}}) do
+    verification = DevOrchestrator.Delivery.Verification.verify(run, data)
+
+    Store.transaction(fn ->
+      current =
+        Store.one("SELECT * FROM runs WHERE id=$1 AND organization_id=$2 FOR UPDATE", [
+          run["id"],
+          run["organization_id"]
+        ]) || Store.halt(:stale_lease)
+
+      if current["lifecycle"] != run["lifecycle"] or
+           current["generation"] != run["generation"] or
+           current["sequence"] != run["sequence"] + 1 or
+           current["executor_id"] != run["executor_id"] or
+           current["state"] not in ~w(leased running),
+         do: Store.halt(:stale_lease)
+
+      apply_candidate_verification(current, data, verification)
+    end)
+  end
+
+  defp finalize_candidate_event(result), do: result
+
   defp event_outcome({:ok, :duplicate}), do: "duplicate"
   defp event_outcome({:ok, _}), do: "accepted"
   defp event_outcome(_), do: "rejected"
@@ -446,9 +499,22 @@ defmodule DevOrchestrator.Runs do
           executor["organization_id"]
         ]) || Store.halt(:stale_lease)
 
-      valid_generation!(run, executor, lease)
+      binding =
+        Store.one(
+          "SELECT project_id FROM executor_bindings WHERE executor_id=$1 AND project_id=$2 AND organization_id=$3",
+          [executor["id"], run["project_id"], executor["organization_id"]]
+        )
+
+      if is_nil(binding), do: Store.halt(:unauthorized)
+
+      superseded? =
+        run["executor_id"] != executor["id"] or run["generation"] != lease["generation"] or
+          run["lifecycle"] != lease["lifecycle"]
 
       cond do
+        superseded? ->
+          %{action: "archive", state: run["state"], reason: "superseded"}
+
         run["state"] in ~w(succeeded failed cancelled blocked queued) ->
           %{action: "acknowledge", state: run["state"]}
 
@@ -539,6 +605,22 @@ defmodule DevOrchestrator.Runs do
     end)
   end
 
+  def executor_revoked(executor) do
+    Store.rows(
+      "SELECT * FROM runs WHERE organization_id=$1 AND executor_id=$2 AND state IN ('leased','running','waiting_for_executor') FOR UPDATE",
+      [executor["organization_id"], executor["id"]]
+    )
+    |> Enum.each(fn run ->
+      finish(run, "blocked", %{
+        "summary" =>
+          "The assigned executor was revoked. Existing workspace files are preserved; retry after pairing another executor.",
+        "category" => "authentication_required"
+      })
+    end)
+
+    :ok
+  end
+
   defp live_executor!(executor) do
     Store.one(
       "SELECT id FROM executors WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL",
@@ -612,8 +694,8 @@ defmodule DevOrchestrator.Runs do
         )
       )
 
-  defp transition(run, "candidate", data) do
-    case DevOrchestrator.Delivery.Verification.verify(run, data) do
+  defp apply_candidate_verification(run, data, verification) do
+    case verification do
       {:ok, result} ->
         finish(run, "succeeded", result)
 

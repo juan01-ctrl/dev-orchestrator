@@ -2,6 +2,30 @@ defmodule DevOrchestrator.Runs.Event do
   @moduledoc "Bounded event data; raw provider/tool output is never persisted."
   @categories ~w(authentication_required local_policy_denied execution_failed publication_failed missing_context interrupted github_installation_required github_permission_denied base_branch_missing github_unavailable workspace_setup_failed environment_setup_failed validation_failed network_unavailable execution_timeout recovery_exhausted)
   @progress_stages ~w(repository_preparing workspace_ready resuming_thread waiting_for_context agent_started working editing environment_preparing validating checks_passed publishing pr_verifying)
+  @secret_pattern ~r/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/
+
+  def sanitize(run, kind, data, previous_text)
+      when is_binary(previous_text) and kind != "activity",
+      do: sanitize(run, kind, data)
+
+  def sanitize(
+        _,
+        "activity",
+        %{"event" => %{"kind" => "message_delta", "text" => text}},
+        previous_text
+      )
+      when is_binary(text) and is_binary(previous_text) do
+    combined = String.slice(previous_text, -80, 80) <> text
+
+    safe =
+      if Regex.match?(@secret_pattern, combined) and not Regex.match?(@secret_pattern, text),
+        do: "[redacted]",
+        else: safe_text(text, 1_000)
+
+    {:ok, %{"event" => %{"kind" => "message_delta", "text" => safe}}}
+  end
+
+  def sanitize(run, kind, data, _previous_text), do: sanitize(run, kind, data)
 
   def sanitize(run, "candidate", data) when is_map(data) do
     allowed = Map.take(data, ~w(repository branch base_branch commit pr_url))
@@ -56,7 +80,7 @@ defmodule DevOrchestrator.Runs.Event do
 
   def sanitize(_, "activity", %{"event" => %{"kind" => "message_delta", "text" => text}})
       when is_binary(text) do
-    {:ok, %{"event" => %{"kind" => "message_delta", "text" => safe_text(text, 1_000)}}}
+    sanitize(%{}, "activity", %{"event" => %{"kind" => "message_delta", "text" => text}}, "")
   end
 
   def sanitize(_, "activity", %{"event" => %{"kind" => "plan", "steps" => steps}})
@@ -134,7 +158,7 @@ defmodule DevOrchestrator.Runs.Event do
   defp safe_text(value, max) do
     value
     |> String.replace(
-      ~r/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/,
+      @secret_pattern,
       "[redacted]"
     )
     |> String.replace(~r{https?://[^\s/@]+:[^\s/@]+@}, "https://[redacted]@")

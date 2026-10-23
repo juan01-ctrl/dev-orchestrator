@@ -7,6 +7,7 @@ defmodule DevOrchestratorWeb.AccountController do
   def login(conn, _), do: page(conn, "login")
   def register(conn, _), do: page(conn, "register")
   def forgot(conn, _), do: page(conn, "forgot")
+  def resend(conn, _), do: page(conn, "resend")
   def reset(conn, %{"token" => token}), do: page(conn, "reset", token: token)
 
   def create_account(conn, params) do
@@ -59,6 +60,14 @@ defmodule DevOrchestratorWeb.AccountController do
     page(conn, "notice", message: "If the account exists, a reset link has been sent.")
   end
 
+  def send_verification(conn, params) do
+    if rate(conn) == :ok, do: Accounts.request_verification(params["email"] || "")
+
+    page(conn, "notice",
+      message: "If the account is awaiting verification, a new link has been sent."
+    )
+  end
+
   def update_password(conn, params) do
     case if(rate(conn) == :ok,
            do: Accounts.reset_password(params["token"], params["password"]),
@@ -109,6 +118,7 @@ defmodule DevOrchestratorWeb.AccountHTML do
             "register" => "Create your workspace",
             "login" => "Welcome back",
             "forgot" => "Reset your password",
+            "resend" => "Resend verification",
             "reset" => "Choose a new password",
             "notice" => "Check your inbox"
           }[@mode]}
@@ -118,7 +128,13 @@ defmodule DevOrchestratorWeb.AccountHTML do
         <form
           :if={@mode != "notice"}
           method="post"
-          action={if @mode == "reset", do: "/reset/" <> (@token || ""), else: "/" <> @mode}
+          action={
+            case @mode do
+              "reset" -> "/reset/" <> (@token || "")
+              "resend" -> "/resend-verification"
+              mode -> "/" <> mode
+            end
+          }
         >
           <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
           <label :if={@mode == "register"}>
@@ -142,6 +158,7 @@ defmodule DevOrchestratorWeb.AccountHTML do
               "login" => "Sign in",
               "register" => "Create workspace",
               "forgot" => "Send reset link",
+              "resend" => "Send verification link",
               "reset" => "Update password"
             }[@mode]}
           </button>
@@ -150,6 +167,7 @@ defmodule DevOrchestratorWeb.AccountHTML do
           <a href="/login">Sign in</a>
           · <a href="/register">Create workspace</a>
           · <a href="/forgot">Forgot password?</a>
+          · <a href="/resend-verification">Resend verification</a>
         </p>
       </section>
     </main>

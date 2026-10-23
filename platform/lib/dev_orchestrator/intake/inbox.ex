@@ -6,7 +6,8 @@ defmodule DevOrchestrator.Intake.Inbox do
   def normalize_linear(headers, raw_body) when is_map(headers) and is_binary(raw_body) do
     with true <- byte_size(raw_body) in 1..@max_body_bytes,
          {:ok, %{"type" => "Issue", "action" => action, "organizationId" => org_id} = body}
-         when action in ["create", "update"] and is_binary(org_id) <- Jason.decode(raw_body),
+         when action in ["create", "update", "remove"] and is_binary(org_id) <-
+           Jason.decode(raw_body),
          issue_id when is_binary(issue_id) <- get_in(body, ["data", "id"]),
          delivery_id when is_binary(delivery_id) and byte_size(delivery_id) in 1..200 <-
            headers["linear-delivery"] do
@@ -98,39 +99,65 @@ defmodule DevOrchestrator.Intake.Inbox do
   end
 
   defp process(row) do
-    with connection when is_map(connection) <-
-           Store.one(
-             "SELECT * FROM connections WHERE provider='linear' AND external_id=$1 AND revoked_at IS NULL ORDER BY created_at LIMIT 1",
-             [row["organization_external_id"]]
-           ),
-         {:ok, token} <- DevOrchestrator.Connections.credential(connection),
-         {:ok, %{"data" => %{"issue" => issue}}} when is_map(issue) <-
+    connections =
+      Store.rows(
+        "SELECT * FROM connections WHERE provider='linear' AND external_id=$1 AND revoked_at IS NULL ORDER BY created_at",
+        [row["organization_external_id"]]
+      )
+
+    cond do
+      connections == [] ->
+        complete(row["id"])
+        :ignored
+
+      Enum.all?(connections, &process_connection(row, &1)) ->
+        complete(row["id"])
+        :processed
+
+      true ->
+        fail(row["id"], row["attempts"], "linear_unavailable")
+        :retry
+    end
+  end
+
+  defp process_connection(row, connection) do
+    projects =
+      Store.rows(
+        "SELECT DISTINCT p.* FROM projects p JOIN connection_grants g ON g.project_id=p.id AND g.organization_id=p.organization_id WHERE g.connection_id=$1 AND g.organization_id=$2 ORDER BY p.created_at",
+        [connection["id"], connection["organization_id"]]
+      )
+
+    if row["event"]["action"] == "remove" do
+      Enum.each(
+        projects,
+        &DevOrchestrator.Runs.Lifecycle.remove_issue(&1, row["event"]["issue_id"])
+      )
+
+      true
+    else
+      process_visible_issue(row, connection, projects)
+    end
+  end
+
+  defp process_visible_issue(row, connection, projects) do
+    with {:ok, token} <- DevOrchestrator.Connections.credential(connection),
+         {:ok, %{"data" => %{"issue" => issue}}} <-
            DevOrchestrator.Connections.Linear.query(
              token,
              "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id}}}",
              %{"id" => row["event"]["issue_id"]}
            ) do
-      projects =
-        Store.rows(
-          "SELECT DISTINCT p.* FROM projects p JOIN connection_grants g ON g.project_id=p.id AND g.organization_id=p.organization_id JOIN connections c ON c.id=g.connection_id AND c.organization_id=p.organization_id WHERE c.provider='linear' AND c.external_id=$1 AND c.revoked_at IS NULL ORDER BY p.created_at",
-          [row["organization_external_id"]]
-        )
+      if is_map(issue),
+        do: Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue)),
+        else:
+          Enum.each(
+            projects,
+            &DevOrchestrator.Runs.Lifecycle.remove_issue(&1, row["event"]["issue_id"])
+          )
 
-      Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
-      complete(row["id"])
-      :processed
+      true
     else
-      nil ->
-        complete(row["id"])
-        :ignored
-
-      {:error, _} ->
-        fail(row["id"], row["attempts"], "linear_unavailable")
-        :retry
-
-      _ ->
-        fail(row["id"], row["attempts"], "linear_unavailable")
-        :retry
+      _ -> false
     end
   end
 end

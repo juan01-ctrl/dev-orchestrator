@@ -33,4 +33,13 @@ export class Journal {
   async clear(): Promise<void> {
     await unlink(join(this.root,"active.json")).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; });
   }
+  async archive(reason: string): Promise<void> {
+    const state=await this.load();
+    if(!state)return;
+    const directory=join(this.root,"archive");
+    await mkdir(directory,{recursive:true,mode:0o700});
+    const safeReason=reason.replace(/[^a-z0-9_-]/gi,"_").slice(0,40)||"superseded";
+    const name=`${state.lease.id}-${state.lease.lifecycle}-${Date.now()}-${safeReason}.json`;
+    await rename(join(this.root,"active.json"),join(directory,name));
+  }
 }

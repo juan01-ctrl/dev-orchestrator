@@ -168,3 +168,15 @@ test("cleans only acknowledged terminal worktrees after their retention window",
     assert.equal(await readFile(join(active.path,"README.md"),"utf8"),"from github\n");
   } finally {await rm(f.root,{recursive:true,force:true});}
 });
+
+test("retention cleanup preserves terminal worktrees with follow-up changes",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const prepared=await manager.prepare(f.root,lease("22222222-2222-4222-8222-222222222222"),credential);
+    await manager.markTerminal(prepared.path,"success");
+    await writeFile(join(prepared.path,"follow-up.txt"),"do not lose this\n");
+    assert.equal(await manager.cleanupExpired(f.root,undefined,Date.now()+25*60*60_000),0);
+    assert.equal(await readFile(join(prepared.path,"follow-up.txt"),"utf8"),"do not lose this\n");
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});

@@ -2,12 +2,19 @@ defmodule DevOrchestrator.Delivery.Outbox do
   alias DevOrchestrator.Store
 
   def enqueue(run, state, result) do
+    snapshot =
+      run["snapshot"] ||
+        Store.one(
+          "SELECT slack_channel,review_state FROM projects WHERE organization_id=$1 AND id=$2",
+          [run["organization_id"], run["project_id"]]
+        ) || %{}
+
     payload = %{
       "title" => run["title"],
       "source_key" => run["source_key"],
       "state" => state,
       "result" => result,
-      "snapshot" => run["snapshot"] || %{},
+      "snapshot" => snapshot,
       "issue_url" => run["issue_url"]
     }
 
@@ -88,7 +95,27 @@ defmodule DevOrchestrator.Delivery.Outbox do
   def list(scope, run_id),
     do:
       Store.rows(
-        "SELECT kind,state,attempts FROM outbox WHERE run_id=$1 AND organization_id=$2 ORDER BY created_at",
+        "SELECT id,kind,state,attempts,last_error_category FROM outbox WHERE run_id=$1 AND organization_id=$2 ORDER BY created_at",
         [run_id, scope.organization_id]
       )
+
+  def retry_failed(scope, id) do
+    case Store.one(
+           "UPDATE outbox SET state='pending',attempts=0,last_error_category=NULL,next_attempt_at=now(),claimed_at=NULL WHERE id=$1 AND organization_id=$2 AND state='failed' RETURNING id",
+           [id, scope.organization_id]
+         ) do
+      nil -> {:error, :not_retryable}
+      _ -> :ok
+    end
+  end
+
+  def acknowledge_ambiguous(scope, id) do
+    case Store.one(
+           "UPDATE outbox SET state='acknowledged',last_error_category=NULL WHERE id=$1 AND organization_id=$2 AND state='ambiguous' RETURNING id",
+           [id, scope.organization_id]
+         ) do
+      nil -> {:error, :not_acknowledgeable}
+      _ -> :ok
+    end
+  end
 end

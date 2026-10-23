@@ -51,14 +51,14 @@ defmodule DevOrchestrator.Projects do
           project.data,
           Map.take(
             attrs,
-            ~w(name repository base_branch instructions concurrency model linear_team linear_project review_state slack_channel)
+            ~w(name repository base_branch instructions concurrency model linear_team linear_project active_states review_state slack_channel)
           )
         )
 
       if valid?(merged) do
         row =
           Store.one(
-            "UPDATE projects SET name=$3,repository=$4,base_branch=$5,instructions=$6,concurrency=$7,version=version+1,model=$8,linear_team=$9,linear_project=$10,review_state=$11,slack_channel=$12 WHERE id=$1 AND organization_id=$2 RETURNING *",
+            "UPDATE projects SET name=$3,repository=$4,base_branch=$5,instructions=$6,concurrency=$7,version=version+1,model=$8,linear_team=$9,linear_project=$10,review_state=$11,slack_channel=$12,active_states=$13 WHERE id=$1 AND organization_id=$2 RETURNING *",
             [
               id,
               scope.organization_id,
@@ -71,9 +71,19 @@ defmodule DevOrchestrator.Projects do
               blank(merged["linear_team"]),
               blank(merged["linear_project"]),
               merged["review_state"] || "In Review",
-              blank(merged["slack_channel"])
+              blank(merged["slack_channel"]),
+              merged["active_states"] || ["Todo", "In Progress"]
             ]
           )
+
+        if Enum.any?(~w(linear_team linear_project active_states), fn key ->
+             project.data[key] != row[key]
+           end) do
+          Store.exec(
+            "DELETE FROM linear_reconciliation_cursors WHERE connection_id IN (SELECT connection_id FROM connection_grants WHERE organization_id=$1 AND project_id=$2)",
+            [scope.organization_id, id]
+          )
+        end
 
         {:ok, public(row)}
       else
@@ -132,6 +142,12 @@ defmodule DevOrchestrator.Projects do
     is_binary(a["name"]) and byte_size(a["name"]) in 1..100 and
       Policy.valid_repository?(a["repository"]) and Policy.valid_branch?(a["base_branch"]) and
       is_binary(a["instructions"]) and byte_size(a["instructions"]) <= 32_000 and
-      integer(a["concurrency"]) in 1..10 and ExecutionPolicy.valid_override?(blank(a["model"]))
+      integer(a["concurrency"]) in 1..10 and ExecutionPolicy.valid_override?(blank(a["model"])) and
+      valid_states?(a["active_states"] || ["Todo", "In Progress"])
   end
+
+  defp valid_states?(states) when is_list(states) and length(states) in 1..20,
+    do: Enum.all?(states, &(is_binary(&1) and byte_size(&1) in 1..100))
+
+  defp valid_states?(_), do: false
 end

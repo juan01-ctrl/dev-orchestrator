@@ -226,6 +226,21 @@ defmodule DevOrchestrator.RunsTest do
              Runs.reconcile(ctx.executor, lease, %{"pending_event" => nil, "thread_id" => ""})
   end
 
+  test "superseded executor journals receive an explicit archive acknowledgement", ctx do
+    {:ok, run} =
+      Runs.create(ctx.scope, ctx.project.id, %{
+        "title" => "Old generation",
+        "prompt" => "Continue"
+      })
+
+    {:ok, old_lease} = Runs.claim(ctx.executor)
+    assert :ok = Runs.cancel(ctx.scope, run["id"])
+    assert :ok = Runs.retry(ctx.scope, run["id"])
+
+    assert {:ok, %{action: "archive", reason: "superseded", state: "queued"}} =
+             Runs.reconcile(ctx.executor, old_lease, %{"pending_event" => nil})
+  end
+
   test "persists one clarification, notifies delivery, and returns the owner's answer", ctx do
     {:ok, run} =
       Runs.create(ctx.scope, ctx.project.id, %{"title" => "Choose stack", "prompt" => "Build it"})
@@ -301,6 +316,18 @@ defmodule DevOrchestrator.RunsTest do
       [ctx.scope.organization_id, ctx.project.id, "acme/app", 42, "acme"]
     )
 
+    connection_id = Store.id()
+
+    Store.exec(
+      "INSERT INTO connections(id,organization_id,provider,label,secret,external_id) VALUES($1,$2,'github','GitHub',decode('00','hex'),'42')",
+      [connection_id, ctx.scope.organization_id]
+    )
+
+    Store.exec(
+      "INSERT INTO connection_grants(organization_id,project_id,connection_id) VALUES($1,$2,$3)",
+      [ctx.scope.organization_id, ctx.project.id, connection_id]
+    )
+
     old_github = Application.get_env(:dev_orchestrator, :github)
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
     key = :public_key.generate_key({:rsa, 2048, 65_537})
@@ -353,6 +380,22 @@ defmodule DevOrchestrator.RunsTest do
 
     assert {:ok, run} = Runs.get(ctx.scope, lease["id"])
     refute Jason.encode!(run) =~ "temporary-secret-token"
+  end
+
+  test "does not issue GitHub credentials for a provisional installation without user authorization",
+       ctx do
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Publish", "prompt" => "Make change"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    Store.exec(
+      "INSERT INTO github_app_installations(organization_id,project_id,repository,installation_id,account) VALUES($1,$2,$3,$4,$5)",
+      [ctx.scope.organization_id, ctx.project.id, "acme/app", 42, "acme"]
+    )
+
+    assert {:error, :github_installation_required} =
+             Runs.github_token(ctx.executor, lease, :checkout)
   end
 
   test "does not issue credentials for an expired or stale lease", ctx do

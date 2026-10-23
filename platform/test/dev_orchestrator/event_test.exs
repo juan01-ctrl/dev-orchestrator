@@ -95,6 +95,19 @@ defmodule DevOrchestrator.EventTest do
     assert text =~ "[local path]"
     assert text =~ "[redacted]"
 
+    assert {:ok, %{"event" => %{"text" => "[redacted]"}}} =
+             Event.sanitize(
+               %{},
+               "activity",
+               %{
+                 "event" => %{
+                   "kind" => "message_delta",
+                   "text" => "p_123456789012345678901234567890"
+                 }
+               },
+               "gh"
+             )
+
     assert {:error, :invalid_event} =
              Event.sanitize(%{}, "activity", %{
                "event" => %{"kind" => "command_output", "text" => "private"}

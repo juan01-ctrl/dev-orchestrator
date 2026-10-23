@@ -45,6 +45,10 @@ export async function recover(api:Transport,journal:Journal,repositories?:Reposi
   if(!state)return null;
   const reconciliation=()=>api.post("/executor/reconcile",{lease:state.lease,journal:{pending_event:state.pending_event??null,thread_id:state.thread_id??null,workspace:state.workspace??null,baseline:state.baseline??null}});
   let result=await reconciliation();
+  if(result.action==="archive") {
+    await journal.archive(typeof result.reason==="string"?result.reason:"superseded");
+    return null;
+  }
   if(result.action==="resume" && ((state.phase==="verify" && state.candidate) || (state.thread_id && state.workspace && /^[a-f0-9]{40,64}$/.test(state.baseline??"")))) {
     state.lease.expires_in_ms=result.expires_in_ms;
     await journal.save(state);
@@ -132,6 +136,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     try {
       const result=await api.post("/executor/renew",state.lease);
       if(!controller.signal.aborted)deadline=started+Math.min(result.expires_in_ms,90_000)-5_000;
+      await api.post("/executor/heartbeat",{protocol:1,codex_authenticated:true,platform:process.platform,active_slots:1}).catch(()=>{});
     } catch(error) {
       if(error instanceof APIError && [401,409].includes(error.status))abort();
       // A transport failure does not extend the last acknowledged deadline.
@@ -182,7 +187,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     state.workspace=workspace.path;state.baseline=workspace.baseline;await journal.save(state);
     if(controller.signal.aborted)throw new Error("Lease ended.");
     if(!resuming)await emitDurably(api,journal,state,"progress",{stage:"workspace_ready"});
-    const publicationContext={workspace:workspace.path,repository:String(snapshot.repository??""),baseBranch:String(snapshot.base_branch??""),branch:workspace.branch,baseline:workspace.baseline};
+    const publicationContext={workspace:workspace.path,repository:String(snapshot.repository??""),baseBranch:String(snapshot.base_branch??""),branch:workspace.branch,baseline:workspace.baseline,gitDir:workspace.gitDir,commonDir:workspace.commonDir};
     const publisher=dependencies.publisherFactory?.(publicationContext)??new Publisher(publicationContext);
     if(state.phase!=="publish") {
     phase="authentication_required";

@@ -20,14 +20,5 @@ export function activityForNotification(message: any): ActivityStage | undefined
     }
   }
 
-  if (
-    message.method === "item/completed" &&
-    item?.type === "commandExecution" &&
-    validationCommand.test(String(item.command ?? "")) &&
-    item.exitCode === 0
-  ) {
-    return "checks_passed";
-  }
-
   return undefined;
 }
