@@ -17,6 +17,7 @@ defmodule DevOrchestratorWeb.HealthController do
           linear: provider_status("linear"),
           slack: provider_status("slack")
         },
+        slack_audio_intake: slack_audio_intake_status(readiness),
         executor: if(readiness["active_executors"] > 0, do: "connected", else: "waiting"),
         task_queue: queue_status(readiness["queued_runs"]),
         intake_queue: queue_status(readiness["pending_webhooks"], readiness["failed_webhooks"]),
@@ -34,6 +35,20 @@ defmodule DevOrchestratorWeb.HealthController do
   defp provider_status(provider),
     do: if(Connections.OAuth.configured?(provider), do: "configured", else: "not_configured")
 
+  defp slack_audio_intake_status(readiness) do
+    slack = Connections.OAuth.config("slack")
+
+    configured =
+      Connections.OAuth.configured?("slack") and is_binary(slack[:signing_secret]) and
+        slack[:signing_secret] != "" and DevOrchestrator.Connections.OpenAI.configured?()
+
+    cond do
+      not configured -> "unconfigured"
+      readiness["failed_slack_drafts"] > 0 or readiness["pending_slack_drafts"] > 100 -> "degraded"
+      true -> "configured"
+    end
+  end
+
   defp queue_status(count, incidents \\ 0)
 
   defp queue_status(_count, incidents) when incidents > 0, do: "needs_attention"
@@ -48,7 +63,9 @@ defmodule DevOrchestratorWeb.HealthController do
       (SELECT count(*) FROM webhook_inbox WHERE state='pending' AND next_attempt_at<=now()) AS pending_webhooks,
       (SELECT count(*) FROM webhook_inbox WHERE state='failed') AS failed_webhooks,
       (SELECT count(*) FROM outbox WHERE state='pending' AND next_attempt_at<=now()) AS pending_deliveries,
-      (SELECT count(*) FROM outbox WHERE state IN ('ambiguous','failed')) AS delivery_incidents
+      (SELECT count(*) FROM outbox WHERE state IN ('ambiguous','failed')) AS delivery_incidents,
+      (SELECT count(*) FROM slack_task_drafts WHERE state='creation_ambiguous' OR (state='failed' AND updated_at>now()-interval '1 day')) AS failed_slack_drafts,
+      (SELECT count(*) FROM slack_task_drafts WHERE state IN ('received','processing','creating')) AS pending_slack_drafts
     """
   end
 end

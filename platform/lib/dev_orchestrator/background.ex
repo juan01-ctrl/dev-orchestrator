@@ -21,6 +21,9 @@ defmodule DevOrchestrator.Background do
       try do
         DevOrchestrator.Runs.expire_leases()
         DevOrchestrator.Intake.Inbox.process_one()
+        DevOrchestrator.Intake.SlackDrafts.process_one()
+        DevOrchestrator.Intake.SlackDrafts.create_one()
+        DevOrchestrator.Intake.SlackDrafts.expire()
         DevOrchestrator.Delivery.Worker.drain()
       rescue
         _ -> Logger.warning("Background operation failed; retained durable state for recovery.")

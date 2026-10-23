@@ -27,7 +27,8 @@ defmodule DevOrchestrator.Connections.OAuth do
     {url, scope} =
       case provider do
         "slack" ->
-          {"https://slack.com/oauth/v2/authorize", "chat:write,channels:read,groups:read"}
+          {"https://slack.com/oauth/v2/authorize",
+           "chat:write,channels:read,groups:read,app_mentions:read,files:read"}
 
         "linear" ->
           {"https://linear.app/oauth/authorize", "read,write"}

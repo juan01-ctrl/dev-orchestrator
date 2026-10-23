@@ -1,5 +1,5 @@
 defmodule DevOrchestrator.Projects do
-  alias DevOrchestrator.{Store, Policy, ExecutionPolicy}
+  alias DevOrchestrator.{Store, Policy, ExecutionPolicy, Connections}
   alias DevOrchestrator.Accounts.Scope
 
   def list(%Scope{} = scope),
@@ -46,6 +46,23 @@ defmodule DevOrchestrator.Projects do
 
   def update_project(%Scope{} = scope, id, attrs) do
     with {:ok, project} <- get_project(scope, id) do
+      try do
+        Store.transaction(fn -> update_project_transaction(scope, id, attrs, project) end)
+        |> case do
+          {:ok, result} -> result
+          {:error, reason} -> {:error, reason}
+        end
+      rescue
+        error in Postgrex.Error ->
+          if error.postgres[:code] == :unique_violation,
+            do: {:error, :slack_channel_already_bound},
+            else: reraise(error, __STACKTRACE__)
+      end
+    end
+  end
+
+  defp update_project_transaction(scope, id, attrs, project) do
+    with {:ok, workspace_id} <- slack_workspace_for_update(scope, id, attrs, project) do
       merged =
         Map.merge(
           project.data,
@@ -54,11 +71,12 @@ defmodule DevOrchestrator.Projects do
             ~w(name repository base_branch instructions concurrency model linear_team linear_project active_states review_state slack_channel)
           )
         )
+        |> Map.put("slack_workspace_id", workspace_id)
 
       if valid?(merged) do
         row =
           Store.one(
-            "UPDATE projects SET name=$3,repository=$4,base_branch=$5,instructions=$6,concurrency=$7,version=version+1,model=$8,linear_team=$9,linear_project=$10,review_state=$11,slack_channel=$12,active_states=$13 WHERE id=$1 AND organization_id=$2 RETURNING *",
+            "UPDATE projects SET name=$3,repository=$4,base_branch=$5,instructions=$6,concurrency=$7,version=version+1,model=$8,linear_team=$9,linear_project=$10,review_state=$11,slack_channel=$12,active_states=$13,slack_workspace_id=$14 WHERE id=$1 AND organization_id=$2 RETURNING *",
             [
               id,
               scope.organization_id,
@@ -72,7 +90,8 @@ defmodule DevOrchestrator.Projects do
               blank(merged["linear_project"]),
               merged["review_state"] || "In Review",
               blank(merged["slack_channel"]),
-              merged["active_states"] || ["Todo", "In Progress"]
+              merged["active_states"] || ["Todo", "In Progress"],
+              workspace_id
             ]
           )
 
@@ -92,11 +111,30 @@ defmodule DevOrchestrator.Projects do
     end
   end
 
+  defp slack_workspace_for_update(scope, id, attrs, project) do
+    cond do
+      not Map.has_key?(attrs, "slack_channel") ->
+        {:ok, project.data["slack_workspace_id"]}
+
+      blank(attrs["slack_channel"]) == nil ->
+        {:ok, nil}
+
+      true ->
+        case Connections.for_project(scope.organization_id, id, "slack") do
+          %{"external_id" => workspace_id} when is_binary(workspace_id) and workspace_id != "" ->
+            {:ok, workspace_id}
+
+          _ ->
+            {:error, :slack_not_connected}
+        end
+    end
+  end
+
   def snapshot(project),
     do:
       Map.take(
         project.data,
-        ~w(id name repository base_branch instructions concurrency version model linear_team linear_project active_states review_state slack_channel)
+        ~w(id name repository base_branch instructions concurrency version model linear_team linear_project active_states review_state slack_workspace_id slack_channel)
       )
 
   def validate_instructions(filename, bytes) when is_binary(filename) and is_binary(bytes) do

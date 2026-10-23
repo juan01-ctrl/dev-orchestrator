@@ -3,12 +3,222 @@ defmodule DevOrchestrator.Connections.Slack do
 
   @channel_page_limit 200
   @max_channel_pages 100
+  @max_audio_bytes 25 * 1_024 * 1_024
+  @audio_types ~w(mp3 mp4 mpeg mpga m4a wav webm)
+
+  def with_audio(token, file_id, callback)
+      when is_binary(token) and token != "" and is_binary(file_id) and is_function(callback, 2) do
+    with {:ok, %{"ok" => true, "file" => file}} <-
+           HTTP.request(:get, "https://slack.com/api/files.info",
+             headers: [{"authorization", "Bearer " <> token}],
+             params: [file: file_id]
+           ),
+         {:ok, metadata} <- validate_audio_metadata(file),
+         true <- trusted_file_url?(metadata.url) do
+      download_audio(token, metadata, callback)
+    else
+      false ->
+        {:error, :invalid_file_url}
+
+      {:ok, %{"ok" => false, "error" => "missing_scope"}} ->
+        {:error, :provider_authentication}
+
+      {:ok, %{"ok" => false}} ->
+        {:error, :provider_rejected}
+
+      {:ok, _} ->
+        {:error, :unsupported_file}
+
+      {:error, _} = error ->
+        error
+    end
+  rescue
+    _ -> {:error, :provider_unavailable}
+  end
+
+  def with_audio(_, _, _), do: {:error, :invalid_file}
+
+  defp validate_audio_metadata(file) when is_map(file) do
+    type = file["filetype"]
+    size = file["size"]
+    url = file["url_private_download"] || file["url_private"]
+
+    cond do
+      file["mode"] != "hosted" ->
+        {:error, :unsupported_file}
+
+      not is_binary(type) or type not in @audio_types ->
+        {:error, :unsupported_file}
+
+      not is_integer(size) or size < 1 ->
+        {:error, :unsupported_file}
+
+      size > @max_audio_bytes ->
+        {:error, :file_too_large}
+
+      not is_binary(url) ->
+        {:error, :invalid_file_url}
+
+      true ->
+        {:ok, %{type: type, size: size, url: url, name: safe_audio_name(file["name"], type)}}
+    end
+  end
+
+  defp validate_audio_metadata(_), do: {:error, :unsupported_file}
+
+  defp trusted_file_url?(url) do
+    case URI.parse(url) do
+      %URI{scheme: "https", host: host, userinfo: nil, port: port}
+      when host in ["slack.com", "files.slack.com"] and port in [nil, 443] ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  defp download_audio(token, metadata, callback) do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "dev-orchestrator-audio-" <>
+          Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      )
+
+    expected_size = metadata.size
+    {:ok, io} = File.open(path, [:write, :binary, :exclusive])
+
+    try do
+      :ok = File.chmod(path, 0o600)
+
+      collector = fn {:data, chunk}, {request, response} ->
+        response_private = response.private || %{}
+        size = Map.get(response_private, :slack_audio_size, 0) + byte_size(chunk)
+
+        if size > @max_audio_bytes do
+          {:halt,
+           {request,
+            %{response | private: Map.put(response_private, :slack_audio_too_large, true)}}}
+        else
+          :ok = IO.binwrite(io, chunk)
+
+          {:cont,
+           {request, %{response | private: Map.put(response_private, :slack_audio_size, size)}}}
+        end
+      end
+
+      result =
+        with {:ok, %{status: 200} = response} <-
+               HTTP.request_response(:get, metadata.url,
+                 headers: [{"authorization", "Bearer " <> token}, {"accept-encoding", "identity"}],
+                 into: collector,
+                 decode_body: false,
+                 decompress_body: false
+               ),
+             false <- Map.get(response.private || %{}, :slack_audio_too_large, false),
+             ^expected_size <- Map.get(response.private || %{}, :slack_audio_size, 0),
+             :ok <- verify_audio_content_length(response.headers || %{}, metadata.size) do
+          :ok = :file.sync(io)
+          callback.(path, Map.drop(metadata, [:url]))
+        else
+          true -> {:error, :file_too_large}
+          {:error, _} = error -> error
+          _ -> {:error, :invalid_provider_response}
+        end
+
+      result
+    after
+      File.close(io)
+      File.rm(path)
+    end
+  end
+
+  defp verify_audio_content_length(headers, size) do
+    length =
+      headers
+      |> Enum.find_value(fn {key, value} ->
+        if String.downcase(to_string(key)) == "content-length", do: List.first(List.wrap(value))
+      end)
+
+    case length do
+      nil ->
+        :ok
+
+      value ->
+        if to_string(value) == Integer.to_string(size),
+          do: :ok,
+          else: {:error, :invalid_provider_response}
+    end
+  end
+
+  defp safe_audio_name(name, type) when is_binary(name) do
+    filename = Path.basename(name)
+    if Path.extname(filename) == "", do: filename <> "." <> type, else: filename
+  end
+
+  defp safe_audio_name(_, type), do: "audio." <> type
 
   def channels(token) when is_binary(token) and token != "" do
     fetch_channels(token, nil, [], MapSet.new(), 0)
   end
 
   def channels(_), do: {:error, :invalid_token}
+
+  def post_message(token, payload) when is_binary(token) and token != "" and is_map(payload) do
+    case HTTP.request(:post, "https://slack.com/api/chat.postMessage",
+           headers: [{"authorization", "Bearer " <> token}],
+           json: payload
+         ) do
+      {:ok, %{"ok" => true, "ts" => ts}} when is_binary(ts) -> {:ok, ts}
+      {:ok, %{"ok" => false, "error" => "ratelimited"}} -> {:error, :provider_rate_limit}
+      {:ok, %{"ok" => false, "error" => "missing_scope"}} -> {:error, :provider_authentication}
+      {:ok, %{"ok" => false}} -> {:error, :provider_rejected}
+      {:ok, _} -> {:error, :invalid_provider_response}
+      {:error, _} = error -> error
+    end
+  end
+
+  def post_message(_, _), do: {:error, :provider_authentication}
+
+  def update_message(token, payload) when is_binary(token) and token != "" and is_map(payload) do
+    case HTTP.request(:post, "https://slack.com/api/chat.update",
+           headers: [{"authorization", "Bearer " <> token}],
+           json: payload
+         ) do
+      {:ok, %{"ok" => true}} -> :ok
+      {:ok, %{"ok" => false, "error" => "ratelimited"}} -> {:error, :provider_rate_limit}
+      {:ok, %{"ok" => false, "error" => "missing_scope"}} -> {:error, :provider_authentication}
+      {:ok, %{"ok" => false}} -> {:error, :provider_rejected}
+      {:ok, _} -> {:error, :invalid_provider_response}
+      {:error, _} = error -> error
+    end
+  end
+
+  def update_message(_, _), do: {:error, :provider_authentication}
+
+  def normalize_action(%{
+        "type" => "block_actions",
+        "team" => %{"id" => workspace_id},
+        "channel" => %{"id" => channel_id},
+        "user" => %{"id" => user_id},
+        "message" => %{"ts" => message_ts},
+        "actions" => [%{"action_id" => action_id, "value" => draft_id} | _]
+      })
+      when action_id in ["create_linear_task", "cancel_linear_task"] and is_binary(draft_id) and
+             is_binary(workspace_id) and is_binary(channel_id) and is_binary(user_id) and
+             is_binary(message_ts) do
+    {:ok,
+     %{
+       "action_id" => action_id,
+       "draft_id" => draft_id,
+       "workspace_id" => workspace_id,
+       "channel_id" => channel_id,
+       "user_id" => user_id,
+       "message_ts" => message_ts
+     }}
+  end
+
+  def normalize_action(_), do: {:error, :invalid_action}
 
   defp fetch_channels(_token, _cursor, _channels, _seen_cursors, page)
        when page >= @max_channel_pages,

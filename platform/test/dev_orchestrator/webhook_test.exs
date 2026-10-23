@@ -32,4 +32,17 @@ defmodule DevOrchestrator.WebhookTest do
 
     refute Signature.valid_linear?(body, signature, nil, 1_700_000_000_000, 1_700_000_000_000)
   end
+
+  test "Slack signatures authenticate the exact body within a five-minute window" do
+    body = ~s({"event_id":"Ev-1"})
+    timestamp = "1700000000"
+    base = "v0:" <> timestamp <> ":" <> body
+    signature = "v0=" <> (:crypto.mac(:hmac, :sha256, "secret", base) |> Base.encode16(case: :lower))
+
+    assert Signature.valid_slack?(body, signature, timestamp, "secret", 1_700_000_000)
+    refute Signature.valid_slack?(body <> " ", signature, timestamp, "secret", 1_700_000_000)
+    refute Signature.valid_slack?(body, signature, timestamp, "secret", 1_700_000_301)
+    refute Signature.valid_slack?(body, "v0=bad", timestamp, "secret", 1_700_000_000)
+    refute Signature.valid_slack?(body, signature, "not-a-time", "secret", 1_700_000_000)
+  end
 end
