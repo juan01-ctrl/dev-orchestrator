@@ -1,7 +1,7 @@
 defmodule DevOrchestrator.Runs.Event do
   @moduledoc "Bounded event data; raw provider/tool output is never persisted."
   @categories ~w(authentication_required local_policy_denied execution_failed publication_failed missing_context interrupted github_installation_required github_permission_denied base_branch_missing github_unavailable workspace_setup_failed)
-  @progress_stages ~w(repository_preparing workspace_ready agent_started working editing validating checks_passed publishing pr_verifying)
+  @progress_stages ~w(repository_preparing workspace_ready resuming_thread waiting_for_context agent_started working editing validating checks_passed publishing pr_verifying)
 
   def sanitize(run, "candidate", data) when is_map(data) do
     allowed = Map.take(data, ~w(repository branch base_branch commit pr_url))
@@ -38,8 +38,66 @@ defmodule DevOrchestrator.Runs.Event do
   def sanitize(_, "progress", %{"stage" => stage}) when stage in @progress_stages,
     do: {:ok, %{"stage" => stage}}
 
+  def sanitize(_, "activity", %{"event" => %{"kind" => "message_delta", "text" => text}})
+      when is_binary(text) do
+    {:ok, %{"event" => %{"kind" => "message_delta", "text" => safe_text(text, 1_000)}}}
+  end
+
+  def sanitize(_, "activity", %{"event" => %{"kind" => "plan", "steps" => steps}})
+      when is_list(steps) do
+    safe_steps =
+      steps
+      |> Enum.take(20)
+      |> Enum.flat_map(fn
+        %{"step" => step, "status" => status} when is_binary(step) and is_binary(status) ->
+          [%{"step" => safe_text(step, 160), "status" => String.slice(status, 0, 32)}]
+
+        _ ->
+          []
+      end)
+
+    {:ok, %{"event" => %{"kind" => "plan", "steps" => safe_steps}}}
+  end
+
+  def sanitize(_, "activity", %{
+        "event" => %{"kind" => "usage", "inputTokens" => input, "outputTokens" => output}
+      })
+      when is_integer(input) and input >= 0 and is_integer(output) and output >= 0,
+      do:
+        {:ok,
+         %{
+           "event" => %{
+             "kind" => "usage",
+             "inputTokens" => min(input, 2_000_000_000),
+             "outputTokens" => min(output, 2_000_000_000)
+           }
+         }}
+
+  def sanitize(_, "activity", %{"event" => %{"kind" => "warning", "message" => message}})
+      when is_binary(message),
+      do: {:ok, %{"event" => %{"kind" => "warning", "message" => safe_text(message, 300)}}}
+
+  def sanitize(_, "activity", %{"event" => %{"kind" => "turn_completed", "status" => status}})
+      when is_binary(status),
+      do:
+        {:ok,
+         %{"event" => %{"kind" => "turn_completed", "status" => String.slice(status, 0, 32)}}}
+
   def sanitize(_, kind, data) when kind in ~w(started no_changes) and is_map(data),
     do: {:ok, %{}}
 
   def sanitize(_, _, _), do: {:error, :invalid_event}
+
+  defp safe_text(value, max) do
+    value
+    |> String.slice(0, max)
+    |> String.replace(
+      ~r/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/,
+      "[redacted]"
+    )
+    |> String.replace(
+      ~r/(?:\/Users\/[^\s"'`]+|\/home\/[^\s"'`]+|[A-Za-z]:\\Users\\[^\s"'`]+)/,
+      "[local path]"
+    )
+  end
 end

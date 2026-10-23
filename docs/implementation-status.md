@@ -1,5 +1,60 @@
 # Implementation checkpoint — October 19, 2026
 
+## Premium runtime parity — October 22, 2026
+
+This implementation is in the isolated worktree
+`/Users/juanierace/Documents/Projects/dev-orchestrator/.worktrees/premium-runtime-parity`
+on branch `feat/premium-runtime-parity`. It has not been pushed or deployed.
+
+Implemented locally in reviewable commits:
+
+- Persistent bidirectional Codex app-server sessions and redacted live activity.
+- Generic signed Linear webhook inbox, asynchronous issue processing and periodic
+  lifecycle reconciliation.
+- Immutable server-selected task model/effort policy and workspace-scoped permission
+  broker. Routine tasks select `gpt-6-luna`/low; planning, reviews, fixes, security
+  and investigation select `gpt-6.1-sol`/high. Project overrides are restricted to
+  the deployment-supported catalog.
+- Bounded exact-host network amendments only; arbitrary hosts and permission
+  expansion are denied. Network egress is not globally enabled.
+- Connector slots (1–10 via `DEV_ORCHESTRATOR_SLOTS`) with independent journals and
+  task worktrees; shared managed repository cache.
+- Concurrent final-report delivery with durable bounded retry for known provider
+  rejection and no automatic retry for ambiguous sends.
+
+Current verification:
+
+| Check | Result |
+|---|---|
+| Connector `npm run check && npm test` | Passed after recovery/clarification changes: 49 tests, 0 failures |
+| Platform `mise exec -- mix test` | User-run: 94 tests, 0 failures |
+| Platform `mise exec -- mix format --check-formatted` | User-run: passed after formatting `runs.ex` |
+| Platform offline harness | Passed: 37 tests, 0 failures; database-backed assertions are not part of this harness |
+| Clarification contract tests | Passed directly: 3 tests, 0 failures |
+| Changed/new Elixir syntax | Parsed successfully: 20 files |
+| `git diff --check` | Passed |
+| Full platform `mise exec -- mix test` in this sandbox | Blocked before ExUnit: Mix 1.19.5 cannot open its local PubSub TCP socket (`:eperm`); the user separately ran the full suite successfully |
+| Project `mix format --check-formatted` in this sandbox | Blocked by the same Mix socket restriction; the user separately ran the full check successfully |
+| Real Linear/Slack/GitHub/Codex smoke tests | Not run; no external task/message, PR, or deployment was initiated |
+
+Same-thread resume, stale-lock recovery, durable Slack/UI clarification, component
+readiness diagnostics, and low-cardinality intake/reconciliation/heartbeat/
+lease/run-event/report telemetry are implemented in this worktree. Database-backed
+run/controller/LiveView verification and full Mix formatting are now confirmed by
+the user's successful platform test/format runs. Executor slot-capacity gauges and
+the owner-authorized provider end-to-end scenarios remain open. The source is still
+not a production-verified release until those remaining gates pass.
+
+## Parity acceptance run — October 22, 2026
+
+- Connector typecheck and suite: **49 passed, 0 failed** (run in the worktree).
+- Platform suite: **94 passed, 0 failed** (reported by the user from their local environment).
+- Platform formatter check: **passed** (reported by the user after correcting `runs.ex`).
+- No real Linear issue, Slack notification, GitHub PR, dependency-install network test,
+  concurrent provider task, or connector restart scenario was triggered. These require
+  a designated test project/repository/channel and owner authorization; acceptance
+  criteria remain incomplete rather than inferred from unit tests.
+
 ## Automatic repository bootstrap — October 21, 2026
 
 The connector now bootstraps the selected project repository directly from its
@@ -46,9 +101,10 @@ Fresh verification for the premium runtime parity work:
 The offline harness now loads the GitHub provider and the already-built Jason/Req
 dependencies when available. This corrects the earlier false-negative run where
 eight provider tests failed because the harness omitted GitHub; it does not replace
-the full Mix/PostgreSQL suite. App-server resume, generic Linear webhooks, issue
-reconciliation, PubSub streaming, model/capability policy and executor slot pooling
-remain unimplemented until their plan tasks are completed.
+the full Mix/PostgreSQL suite. At this baseline checkpoint, app-server resume,
+generic Linear webhooks, issue reconciliation, PubSub streaming, model/capability
+policy and executor slot pooling were not yet implemented; subsequent sections
+record the work completed after that point.
 
 ## Source implemented
 
@@ -78,10 +134,11 @@ remain unimplemented until their plan tasks are completed.
 | Git destination inspection | Terminal CONNECT proxy 403; connected GitHub read 404 (absence vs access cannot be distinguished) |
 | Push / remote HEAD verification | Not performed; destination inaccessible and integrated gates incomplete |
 
-Offline compiler warnings identify unavailable Ecto SQL/Postgrex/password/email
-packages; compilation against cached libraries is not a substitute for the complete
-dependency build. The platform lockfile remains unresolved. The connector lockfile
-was generated from the local package cache without global software installation.
+Offline compiler warnings identify database-backed modules omitted by the offline
+harness; they are not a substitute for the complete dependency build. Both
+`connector/package-lock.json` and `platform/mix.lock` are tracked. The connector
+lockfile was generated from the local package cache without global software
+installation.
 
 ## Review findings addressed
 
@@ -113,7 +170,7 @@ the complete integration gate, not just a static review.
 ## Resume
 
 1. Start Docker outside the restricted execution environment and follow the README.
-2. Resolve and commit `platform/mix.lock`; run complete server/connector checks.
+2. Verify the tracked `platform/mix.lock`; run complete server/connector checks.
 3. Complete browser, restart/concurrency and designated provider smoke tests from
    `docs/evaluation.md`, fixing observed failures before claiming completion.
 4. Verify access/history of `juan01-ctrl/dev-orchestrator`, then push without force

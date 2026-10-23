@@ -41,38 +41,6 @@ defmodule DevOrchestrator.Intake.Linear do
   end
 
   def accept(project, issue) do
-    eligible =
-      is_binary(project["linear_team"]) and
-        project["linear_team"] == get_in(issue, ["team", "id"]) and
-        (is_nil(project["linear_project"]) or
-           project["linear_project"] == get_in(issue, ["project", "id"])) and
-        get_in(issue, ["state", "name"]) in project["active_states"]
-
-    if eligible do
-      prompt =
-        String.slice((issue["title"] || "") <> "\n\n" <> (issue["description"] || ""), 0, 8_000)
-
-      title =
-        String.slice(
-          (issue["identifier"] || "Issue") <> " — " <> (issue["title"] || "Development task"),
-          0,
-          240
-        )
-
-      Store.exec(
-        "INSERT INTO runs(id,organization_id,project_id,source_key,title,prompt,issue_url) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(project_id,source_key) DO NOTHING",
-        [
-          Store.id(),
-          project["organization_id"],
-          project["id"],
-          "linear:" <> issue["id"],
-          title,
-          prompt,
-          issue["url"]
-        ]
-      )
-    end
-
-    :ok
+    DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue)
   end
 end

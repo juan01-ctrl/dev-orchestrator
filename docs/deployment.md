@@ -45,8 +45,25 @@ If enabling GitHub, pass an operator-owned override file in all three commands
 to mount its private key read-only at `GITHUB_PRIVATE_KEY_PATH` inside the container.
 Do not place the key in the build context.
 
-`GET /api/v1/health` checks the web process; `/api/v1/ready` also checks database
-access. Provider authorization is a separate check, not implied by readiness.
+`GET /api/v1/health` checks the web process. `/api/v1/ready` requires database
+access and reports component states for optional provider apps, live executors,
+task/intake queues and report delivery. Optional integrations can be unconfigured
+without making the web service unready; queue backlogs and delivery incidents are
+reported as component states without tenant identifiers or raw provider details.
+The readiness body intentionally reports qualitative states rather than queue
+counts or tenant-specific data.
+The service emits low-cardinality `:telemetry` events for Linear webhook intake
+and reconciliation, executor heartbeats, run lease queue wait, accepted run events
+(including Codex turn and publication events), and provider report delivery.
+Measurements contain counts and durations; metadata contains only bounded event
+kinds, provider names, and outcome categories. Attach a metrics exporter through
+the standard Elixir `:telemetry` ecosystem; do not add tenant IDs, issue titles,
+tokens, or raw provider responses as labels.
+
+The connector defaults to one task slot. Set `DEV_ORCHESTRATOR_SLOTS` to an integer
+from 1 to 10 before starting it to enable multiple isolated local runs. Effective
+parallelism is still bounded by project concurrency and executor bindings. Each slot
+uses its own journal and task worktree while sharing the managed repository cache.
 
 ## Free hosted evaluation (Render + Neon)
 
@@ -103,11 +120,16 @@ is not an automatic feature of this evaluation.
 
 On restart, queued tasks remain queued. Active expired leases wait for executor
 reconciliation; they are not reassigned automatically. Do not delete preserved
-customer workspaces to clear a task. Unknown Slack send outcomes remain ambiguous,
-not silently resent. Inspect the outbox before deciding whether to resend manually.
+customer workspaces to clear a task. Known provider rejections use bounded backoff;
+unknown Slack send outcomes remain ambiguous, not silently resent. Inspect the
+outbox before deciding whether to resend manually. Apply the new outbox migration
+with the normal release migration command before starting updated binaries.
 
 ## Reproducibility and current validation limits
 
-The connector and platform have committed lockfiles. Still run the full
-PostgreSQL/authentication/UI suite and provider smoke test against the deployed
-environment before treating it as production-ready.
+The connector and platform have committed lockfiles. The implementation harness
+cannot run `mix test` because Mix.PubSub is denied a local TCP socket (`:eperm`);
+that environment restriction is not evidence that database-backed tests pass.
+Run the complete PostgreSQL/authentication/UI suite, migration checks, and
+designated provider smoke test in a normal environment before exposing the
+service or treating it as production-ready.

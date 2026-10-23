@@ -1,5 +1,5 @@
 defmodule DevOrchestrator.Projects do
-  alias DevOrchestrator.{Store, Policy}
+  alias DevOrchestrator.{Store, Policy, ExecutionPolicy}
   alias DevOrchestrator.Accounts.Scope
 
   def list(%Scope{} = scope),
@@ -25,7 +25,7 @@ defmodule DevOrchestrator.Projects do
     if valid?(attrs) do
       row =
         Store.one(
-          "INSERT INTO projects(id,organization_id,name,repository,base_branch,instructions,concurrency) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+          "INSERT INTO projects(id,organization_id,name,repository,base_branch,instructions,concurrency,model) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *",
           [
             Store.id(),
             scope.organization_id,
@@ -33,7 +33,8 @@ defmodule DevOrchestrator.Projects do
             attrs["repository"],
             attrs["base_branch"],
             attrs["instructions"],
-            integer(attrs["concurrency"])
+            integer(attrs["concurrency"]),
+            blank(attrs["model"])
           ]
         )
 
@@ -126,6 +127,6 @@ defmodule DevOrchestrator.Projects do
     is_binary(a["name"]) and byte_size(a["name"]) in 1..100 and
       Policy.valid_repository?(a["repository"]) and Policy.valid_branch?(a["base_branch"]) and
       is_binary(a["instructions"]) and byte_size(a["instructions"]) <= 32_000 and
-      integer(a["concurrency"]) in 1..10
+      integer(a["concurrency"]) in 1..10 and ExecutionPolicy.valid_override?(blank(a["model"]))
   end
 end

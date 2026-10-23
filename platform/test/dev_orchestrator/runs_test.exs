@@ -106,8 +106,113 @@ defmodule DevOrchestrator.RunsTest do
            ] = Runs.events(ctx.scope, run["id"])
   end
 
+  test "reconciles an active Codex thread without converting it into a blocker", ctx do
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Resume", "prompt" => "Continue"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:ok, %{action: "resume", state: "running", expires_in_ms: 90_000}} =
+             Runs.reconcile(ctx.executor, lease, %{
+               "pending_event" => nil,
+               "thread_id" => "codex-thread-123",
+               "workspace" => "/connector/runtime/workspaces/run",
+               "baseline" => String.duplicate("a", 40)
+             })
+  end
+
+  test "does not resume an active run without a valid Codex thread", ctx do
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "No thread", "prompt" => "Continue"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:ok, %{action: "acknowledge", state: "blocked"}} =
+             Runs.reconcile(ctx.executor, lease, %{"pending_event" => nil, "thread_id" => ""})
+  end
+
+  test "persists one clarification, notifies delivery, and returns the owner's answer", ctx do
+    {:ok, run} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Choose stack", "prompt" => "Build it"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    request = %{
+      "turnId" => "turn-1",
+      "questions" => [
+        %{"id" => "framework", "header" => "Framework", "question" => "Which framework?"}
+      ]
+    }
+
+    assert {:ok, %{id: clarification_id, status: "open"}} =
+             Runs.request_clarification(ctx.executor, lease, request)
+
+    assert {:ok, %{id: ^clarification_id, status: "open"}} =
+             Runs.request_clarification(ctx.executor, lease, request)
+
+    assert [%{"kind" => delivery_kind, "state" => "pending"}] =
+             DevOrchestrator.Delivery.Outbox.list(ctx.scope, run["id"])
+
+    assert delivery_kind == "slack:clarification:" <> clarification_id
+
+    assert :ok =
+             Runs.answer_clarification(ctx.scope, clarification_id, %{
+               "answers" => %{"framework" => "Phoenix"}
+             })
+
+    assert {:ok,
+            %{
+              status: "answered",
+              answer: %{"answers" => %{"framework" => %{"answers" => ["Phoenix"]}}}
+            }} = Runs.clarification_status(ctx.executor, lease, clarification_id)
+  end
+
+  test "rejects secret clarification requests", ctx do
+    {:ok, _run} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Choose stack", "prompt" => "Build it"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "running"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "started",
+               "data" => %{}
+             })
+
+    assert {:error, :invalid_clarification} =
+             Runs.request_clarification(ctx.executor, lease, %{
+               "questions" => [
+                 %{"id" => "secret", "question" => "What is the token?", "isSecret" => true}
+               ]
+             })
+  end
+
   test "issues a scoped GitHub credential only for the executor's live project lease", ctx do
-    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Publish", "prompt" => "Make change"})
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Publish", "prompt" => "Make change"})
+
     {:ok, lease} = Runs.claim(ctx.executor)
 
     Store.exec(
@@ -117,17 +222,33 @@ defmodule DevOrchestrator.RunsTest do
 
     old_github = Application.get_env(:dev_orchestrator, :github)
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
-    Application.put_env(:dev_orchestrator, :github, app_id: "12345", app_slug: "test-app")
+    key = :public_key.generate_key({:rsa, 2048, 65_537})
+    pem = :public_key.pem_encode([:public_key.pem_entry_encode(:RSAPrivateKey, key)])
+
+    key_path =
+      Path.join(System.tmp_dir!(), "runs-github-#{System.unique_integer([:positive])}.pem")
+
+    File.write!(key_path, pem)
+
+    Application.put_env(:dev_orchestrator, :github,
+      app_id: "12345",
+      app_slug: "test-app",
+      private_key_path: key_path
+    )
 
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
       assert opts[:url] == "https://api.github.com/app/installations/42/access_tokens"
+
       assert opts[:json] == %{
                repositories: ["acme/app"],
                permissions: %{contents: "read"}
              }
 
       {:ok,
-       %{status: 201, body: %{"token" => "temporary-secret-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+       %{
+         status: 201,
+         body: %{"token" => "temporary-secret-token", "expires_at" => "2099-01-01T00:00:00Z"}
+       }}
     end)
 
     on_exit(fn ->
@@ -138,6 +259,8 @@ defmodule DevOrchestrator.RunsTest do
       if old_transport,
         do: Application.put_env(:dev_orchestrator, :provider_transport, old_transport),
         else: Application.delete_env(:dev_orchestrator, :provider_transport)
+
+      File.rm(key_path)
     end)
 
     assert {:ok,
@@ -155,16 +278,24 @@ defmodule DevOrchestrator.RunsTest do
     {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Expired", "prompt" => "Run"})
     {:ok, lease} = Runs.claim(ctx.executor)
 
-    Store.exec("UPDATE runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1", [lease["id"]])
+    Store.exec("UPDATE runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1", [
+      lease["id"]
+    ])
+
     assert {:error, :stale_lease} = Runs.github_token(ctx.executor, lease, :checkout)
 
-    Store.exec("UPDATE runs SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1", [lease["id"]])
+    Store.exec("UPDATE runs SET lease_expires_at=now()+interval '90 seconds' WHERE id=$1", [
+      lease["id"]
+    ])
+
     assert {:error, :stale_lease} =
              Runs.github_token(ctx.executor, Map.put(lease, "generation", -1), :checkout)
   end
 
   test "does not issue credentials when the project repository changes after leasing", ctx do
-    {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Changed repo", "prompt" => "Run"})
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Changed repo", "prompt" => "Run"})
+
     {:ok, lease} = Runs.claim(ctx.executor)
     {:ok, _} = Projects.update_project(ctx.scope, ctx.project.id, %{"repository" => "acme/other"})
 
@@ -174,12 +305,22 @@ defmodule DevOrchestrator.RunsTest do
   test "does not issue credentials without an installation, binding, or live executor", ctx do
     {:ok, _} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Unbound", "prompt" => "Run"})
     {:ok, lease} = Runs.claim(ctx.executor)
-    assert {:error, :github_installation_required} = Runs.github_token(ctx.executor, lease, :checkout)
 
-    Store.exec("DELETE FROM executor_bindings WHERE executor_id=$1 AND project_id=$2", [ctx.executor["id"], ctx.project.id])
+    assert {:error, :github_installation_required} =
+             Runs.github_token(ctx.executor, lease, :checkout)
+
+    Store.exec("DELETE FROM executor_bindings WHERE executor_id=$1 AND project_id=$2", [
+      ctx.executor["id"],
+      ctx.project.id
+    ])
+
     assert {:error, :unauthorized} = Runs.github_token(ctx.executor, lease, :checkout)
 
-    Store.exec("INSERT INTO executor_bindings(organization_id,executor_id,project_id) VALUES($1,$2,$3)", [ctx.scope.organization_id, ctx.executor["id"], ctx.project.id])
+    Store.exec(
+      "INSERT INTO executor_bindings(organization_id,executor_id,project_id) VALUES($1,$2,$3)",
+      [ctx.scope.organization_id, ctx.executor["id"], ctx.project.id]
+    )
+
     Store.exec("UPDATE executors SET revoked_at=now() WHERE id=$1", [ctx.executor["id"]])
     assert {:error, :unauthorized} = Runs.github_token(ctx.executor, lease, :checkout)
   end

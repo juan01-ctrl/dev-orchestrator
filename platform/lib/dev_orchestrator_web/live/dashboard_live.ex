@@ -4,7 +4,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
   import DevOrchestratorWeb.DashboardComponents
 
   def mount(_, session, socket) do
-    if connected?(socket), do: Process.send_after(self(), :refresh, 5_000)
+    if connected?(socket), do: Process.send_after(self(), :refresh, 30_000)
 
     {:ok,
      socket
@@ -16,7 +16,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
        instruction_error: nil,
        slack_channels: [],
        slack_connected: false,
-       slack_channel_message: nil
+       slack_channel_message: nil,
+       subscribed_run_id: nil,
+       clarifications: []
      )
      |> allow_upload(:instructions,
        accept: ~w(.md),
@@ -25,12 +27,26 @@ defmodule DevOrchestratorWeb.DashboardLive do
      )}
   end
 
-  def handle_params(params, _, socket),
-    do: {:noreply, socket |> assign(:params, params) |> refresh() |> load_slack_channels()}
+  def handle_params(params, _, socket) do
+    socket =
+      socket
+      |> assign(:params, params)
+      |> refresh()
+      |> load_slack_channels()
+      |> subscribe_to_selected_run()
+
+    {:noreply, socket}
+  end
 
   def handle_info(:refresh, socket) do
-    Process.send_after(self(), :refresh, 5_000)
+    Process.send_after(self(), :refresh, 30_000)
     {:noreply, refresh(socket)}
+  end
+
+  def handle_info({:run_updated, run_id}, socket) do
+    if get_in(socket.assigns, [:selected_run, "id"]) == run_id,
+      do: {:noreply, refresh(socket)},
+      else: {:noreply, socket}
   end
 
   def handle_event(event, params, socket) do
@@ -153,6 +169,27 @@ defmodule DevOrchestratorWeb.DashboardLive do
         "Cancellation recorded. The executor stops on lease renewal."
       )
 
+  defp dispatch("answer_clarification", %{"id" => id, "answers" => answers}, socket) do
+    case Runs.answer_clarification(socket.assigns.scope, id, %{"answers" => answers}) do
+      :ok ->
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Context sent. The task will continue from its current Codex thread."
+         )
+         |> refresh()}
+
+      _ ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "The context request is no longer open or the answers are incomplete."
+         )}
+    end
+  end
+
   defp dispatch(_, _, socket), do: {:noreply, socket}
 
   defp consume_instructions(socket, requirement) do
@@ -234,12 +271,35 @@ defmodule DevOrchestratorWeb.DashboardLive do
           selected_run: run,
           deliveries:
             if(run, do: DevOrchestrator.Delivery.Outbox.list(scope, run["id"]), else: []),
-          events: if(run, do: Runs.events(scope, run["id"]), else: [])
+          events: if(run, do: Runs.events(scope, run["id"]), else: []),
+          clarifications:
+            if(run,
+              do:
+                case Runs.clarifications(scope, run["id"]) do
+                  {:ok, values} -> values
+                  _ -> []
+                end,
+              else: []
+            )
         )
 
       _ ->
         redirect(socket, to: "/login")
     end
+  end
+
+  defp subscribe_to_selected_run(socket) do
+    run_id = get_in(socket.assigns, [:selected_run, "id"])
+    previous_id = socket.assigns[:subscribed_run_id]
+
+    if connected?(socket) and previous_id != run_id do
+      if previous_id,
+        do: Phoenix.PubSub.unsubscribe(DevOrchestrator.PubSub, "run:" <> previous_id)
+
+      if run_id, do: Runs.subscribe(socket.assigns.scope, run_id)
+    end
+
+    assign(socket, :subscribed_run_id, run_id)
   end
 
   defp load_slack_channels(
@@ -352,7 +412,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
             </div>
             <section class="panel">
               <h2>New project</h2>
-              <form phx-change="validate_project_upload" phx-submit="create_project">
+              <form id="new-project" phx-change="validate_project_upload" phx-submit="create_project">
                 <.field name="name" label="Project name" required /><.field
                   name="repository"
                   label="GitHub repository"
@@ -425,11 +485,18 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   type="number"
                   label="Parallel tasks (1–10)"
                   value={@selected.data["concurrency"]}
-                /><.field
-                  name="model"
-                  label="Model override (optional)"
-                  value={@selected.data["model"]}
                 />
+                <label for="project-model">Model override</label>
+                <select id="project-model" name="model">
+                  <option value="">Automatic</option>
+                  <option
+                    :for={model <- DevOrchestrator.ExecutionPolicy.supported_models()}
+                    value={model}
+                    selected={@selected.data["model"] == model}
+                  >
+                    {model}
+                  </option>
+                </select>
                 <.field
                   name="linear_team"
                   label="Linear team ID"
@@ -523,7 +590,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   </button>
                 </form>
                 <span
-                  :if={provider == "github" and @scope.role == "owner" and @github_status == :connected}
+                  :if={
+                    provider == "github" and @scope.role == "owner" and @github_status == :connected
+                  }
                   class="badge"
                 >
                   GitHub connected
@@ -547,26 +616,35 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   Workspace owner required
                 </span>
                 <span
-                  :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?(provider)}
+                  :if={
+                    @scope.role == "owner" and
+                      !DevOrchestrator.Connections.OAuth.configured?(provider)
+                  }
                   class="badge"
                 >
                   Server setup required
                 </span>
               </div>
               <p
-                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("github")}
+                :if={
+                  @scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("github")
+                }
                 class="fine muted"
               >
                 GitHub needs GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_APP_ID, GITHUB_APP_SLUG and GITHUB_PRIVATE_KEY_PATH on the server.
               </p>
               <p
-                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("linear")}
+                :if={
+                  @scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("linear")
+                }
                 class="fine muted"
               >
                 Linear needs LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET on the server.
               </p>
               <p
-                :if={@scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("slack")}
+                :if={
+                  @scope.role == "owner" and !DevOrchestrator.Connections.OAuth.configured?("slack")
+                }
                 class="fine muted"
               >
                 Slack needs SLACK_CLIENT_ID and SLACK_CLIENT_SECRET on the server.
@@ -651,12 +729,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <h2>Authorize a project</h2>
             <label>
               Executor<select name="executor_id"><option
-                  :for={e <- @executors}
-                  :if={!e["revoked_at"]}
-                  value={e["id"]}
-                >{e["name"]}</option></select>
+                :for={e <- @executors}
+                :if={!e["revoked_at"]}
+                value={e["id"]}
+              >
+                {e["name"]}
+              </option></select>
             </label>
-            <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select></label><button>Authorize project</button>
+            <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>
+              {p.name}
+            </option></select></label><button>Authorize project</button>
             <p class="fine muted">
               {length(@bindings)} project bindings configured. The local allowlist is still required.
             </p>
@@ -672,7 +754,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
           <form :if={@projects != []} class="panel" phx-submit="create_run">
             <h2>New task</h2>
             <label>
-              Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select>
+              Project<select name="project_id"><option :for={p <- @projects} value={p.id}>
+                {p.name}
+              </option></select>
             </label>
             <.field name="title" label="Task title" required />
             <label>
@@ -688,7 +772,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
             description="Only verified delivery counts as success. Files and commits are preserved when work is interrupted."
           />
           <div class="delivery-rail">
-            <span class="badge">{humanize(@selected_run["state"])}</span><span>Attempt {@selected_run["generation"]}</span><span>Lifecycle {@selected_run["lifecycle"]}</span>
+            <span class="badge">{humanize(@selected_run["state"])}</span><span>Attempt {@selected_run[
+              "generation"
+            ]}</span><span>Lifecycle {@selected_run["lifecycle"]}</span>
           </div>
           <section :if={@selected_run["result"]} class="panel">
             <h2>Result</h2>
@@ -709,7 +795,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 <p class="eyebrow">Execution activity</p>
                 <h2>What’s happening</h2>
               </div>
-              <span class={if(@selected_run["state"] == "running", do: "activity-status is-live", else: "activity-status")} role="status" aria-live="polite">
+              <span
+                class={
+                  if(@selected_run["state"] == "running",
+                    do: "activity-status is-live",
+                    else: "activity-status"
+                  )
+                }
+                role="status"
+                aria-live="polite"
+              >
                 <span class="activity-status-dot" aria-hidden="true"></span>
                 {if @selected_run["state"] == "running", do: "Live", else: "Activity log"}
               </span>
@@ -717,11 +812,27 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <p class="fine muted activity-note">
               Updates as work progresses. Private reasoning and raw command output stay hidden.
             </p>
-            <ol :if={@events != []} class="activity-list" aria-live="polite" aria-relevant="additions text">
+            <ol
+              :if={@events != []}
+              class="activity-list"
+              aria-live="polite"
+              aria-relevant="additions text"
+            >
               <li
                 :for={{event, index} <- Enum.with_index(@events)}
-                class={["activity-item", if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "is-current", else: nil)]}
-                aria-current={if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "step", else: nil)}
+                class={[
+                  "activity-item",
+                  if(@selected_run["state"] == "running" and index == length(@events) - 1,
+                    do: "is-current",
+                    else: nil
+                  )
+                ]}
+                aria-current={
+                  if(@selected_run["state"] == "running" and index == length(@events) - 1,
+                    do: "step",
+                    else: nil
+                  )
+                }
               >
                 <span class="activity-marker" aria-hidden="true"></span>
                 <div class="activity-content">
@@ -736,6 +847,43 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <p :if={@events == []} class="activity-empty muted" role="status">
               Waiting for the local executor to report its first update…
             </p>
+          </section>
+          <section :if={@clarifications != []} class="panel">
+            <h2>Additional context</h2>
+            <article :for={clarification <- @clarifications} class="connection-row">
+              <div>
+                <span class="badge">{humanize(clarification["status"])}</span>
+                <p :for={question <- clarification["questions"]} class="fine">
+                  <strong>{question["header"]}:</strong> {question["question"]}
+                  <span :if={question["options"] != []} class="fine muted">
+                    Options: {Enum.map_join(question["options"], ", ", & &1["label"])}
+                  </span>
+                </p>
+                <p :if={clarification["status"] == "answered"} class="fine muted">
+                  Answer submitted. The executor will continue this task.
+                </p>
+              </div>
+              <form
+                :if={clarification["status"] == "open" and @scope.role == "owner"}
+                phx-submit="answer_clarification"
+                phx-value-id={clarification["id"]}
+              >
+                <label :for={question <- clarification["questions"]}>
+                  {question["header"]}
+                  <input
+                    type="text"
+                    name={"answers[" <> question["id"] <> "]"}
+                    maxlength="2000"
+                    required
+                    placeholder="Add the missing context"
+                  />
+                </label>
+                <button type="submit">Send context</button>
+              </form>
+              <p :if={clarification["status"] == "expired"} class="fine muted">
+                This request expired or the run ended before context was supplied. Check the run result for next steps.
+              </p>
+            </article>
           </section>
           <section :if={@deliveries != []} class="panel">
             <h2>Report delivery</h2>

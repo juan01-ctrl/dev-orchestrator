@@ -56,6 +56,29 @@ defmodule DevOrchestrator.ProviderTest do
     assert query["scope"] == "chat:write,channels:read,groups:read"
   end
 
+  test "Slack clarification delivery links to the run without exposing provider internals" do
+    payload = %{
+      "title" => "Choose a framework",
+      "url" => "https://orchestrix.example/app/runs/run-1",
+      "questions" => [
+        %{
+          "header" => "Framework",
+          "question" => "Which framework should we use?",
+          "options" => [%{"label" => "Phoenix"}]
+        }
+      ]
+    }
+
+    message = Slack.clarification(payload, "C123")
+    assert message.channel == "C123"
+    assert message.text =~ "Choose a framework"
+    assert Enum.any?(message.blocks, &(&1.type == "actions"))
+
+    assert message.blocks
+           |> Enum.flat_map(&Map.get(&1, :elements, []))
+           |> Enum.any?(&(&1.url == payload["url"]))
+  end
+
   test "Slack channel picker lists only bot-accessible channels across pages" do
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
       assert opts[:url] == "https://slack.com/api/conversations.list"
@@ -225,13 +248,17 @@ defmodule DevOrchestrator.ProviderTest do
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
       assert opts[:url] == "https://api.github.com/app/installations/42/access_tokens"
       assert opts[:method] == :post
+
       assert opts[:json] == %{
                repositories: ["acme/app"],
                permissions: %{contents: "read"}
              }
 
       {:ok,
-       %{status: 201, body: %{"token" => "ephemeral-checkout-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+       %{
+         status: 201,
+         body: %{"token" => "ephemeral-checkout-token", "expires_at" => "2099-01-01T00:00:00Z"}
+       }}
     end)
 
     assert {:ok, %{token: "ephemeral-checkout-token", expires_at: "2099-01-01T00:00:00Z"}} =
@@ -245,7 +272,11 @@ defmodule DevOrchestrator.ProviderTest do
                permissions: %{contents: "write", pull_requests: "write"}
              }
 
-      {:ok, %{status: 201, body: %{"token" => "ephemeral-publish-token", "expires_at" => "2099-01-01T00:00:00Z"}}}
+      {:ok,
+       %{
+         status: 201,
+         body: %{"token" => "ephemeral-publish-token", "expires_at" => "2099-01-01T00:00:00Z"}
+       }}
     end)
 
     assert {:ok, %{token: "ephemeral-publish-token"}} =

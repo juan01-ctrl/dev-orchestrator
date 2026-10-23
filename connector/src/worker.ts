@@ -2,13 +2,29 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { Journal } from "./journal.ts";
 import { API, APIError } from "./api.ts";
-import { CodexSession, RepeatedFailureError, CodexBlockedError } from "./codex.ts";
+import { CodexSession, RepeatedFailureError, CodexBlockedError, CodexPolicyError } from "./codex.ts";
 import { RepositoryWorkspace } from "./repository.ts";
 import { Publisher, type PublicationContext } from "./publisher.ts";
 import type { Config, JournalState } from "./types.ts";
 
 type Transport={post:(path:string,payload:unknown)=>Promise<any>};
 type ExecutionDependencies={dataRoot?:string;repositories?:RepositoryWorkspace;publisherFactory?:(context:PublicationContext)=>Publisher};
+
+export async function waitForClarification(api:Transport,lease:JournalState["lease"],params:any,signal?:AbortSignal,pollIntervalMs=3_000):Promise<{response:unknown;expired:boolean}> {
+  const request=await api.post("/executor/clarifications/request",{lease,questions:params?.questions,turnId:params?.turnId??params?.turn_id??""});
+  if(request.status==="answered")return {response:request.answer??{answers:{}},expired:false};
+  if(request.status==="expired")return {response:{answers:{}},expired:true};
+  if(typeof request.id!=="string")throw new Error("The clarification request could not be persisted.");
+  const deadline=Date.now()+19*60_000;
+  while(!signal?.aborted&&Date.now()<deadline) {
+    const current=await api.post("/executor/clarifications/status",{lease,id:request.id});
+    if(current.status==="answered")return {response:current.answer??{answers:{}},expired:false};
+    if(current.status==="expired")return {response:{answers:{}},expired:true};
+    await new Promise(resolve=>setTimeout(resolve,pollIntervalMs));
+  }
+  if(signal?.aborted)throw new Error("Clarification wait was interrupted.");
+  return {response:{answers:{}},expired:true};
+}
 
 export async function emitDurably(api:Transport,journal:Journal,state:JournalState,kind:string,data:Record<string,unknown>):Promise<any> {
   if(state.pending_event)throw new Error("A previous event still needs acknowledgement.");
@@ -21,40 +37,62 @@ export async function emitDurably(api:Transport,journal:Journal,state:JournalSta
   return result;
 }
 
-export async function recover(api:Transport,journal:Journal,repositories?:RepositoryWorkspace,dataRoot?:string):Promise<void> {
+export async function recover(api:Transport,journal:Journal,repositories?:RepositoryWorkspace,dataRoot?:string):Promise<JournalState|null> {
   const state=await journal.load();
-  if(!state)return;
-  const result=await api.post("/executor/reconcile",{lease:state.lease,journal:{pending_event:state.pending_event??null}});
+  if(!state)return null;
+  const reconciliation=()=>api.post("/executor/reconcile",{lease:state.lease,journal:{pending_event:state.pending_event??null,thread_id:state.thread_id??null,workspace:state.workspace??null,baseline:state.baseline??null}});
+  let result=await reconciliation();
+  if(result.action==="resume" && state.thread_id && state.workspace && /^[a-f0-9]{40,64}$/.test(state.baseline??"")) {
+    state.lease.expires_in_ms=result.expires_in_ms;
+    await journal.save(state);
+    return state;
+  }
   let terminalState=result.state;
   if(result.action==="replay" && state.pending_event) {
     const kind=state.pending_event.kind;
     const acknowledgement=await api.post("/executor/events",{lease:state.lease,event:state.pending_event});
     if(["succeeded","blocked","failed","cancelled"].includes(acknowledgement?.state))terminalState=acknowledgement.state;
-    if(["started","progress"].includes(kind))terminalState=(await api.post("/executor/reconcile",{lease:state.lease,journal:{pending_event:null}})).state;
+    if(["started","progress","activity"].includes(kind)) {
+      delete state.pending_event;
+      await journal.save(state);
+      result=await reconciliation();
+      if(result.action==="resume" && state.thread_id && state.workspace && /^[a-f0-9]{40,64}$/.test(state.baseline??"")) {
+        state.lease.expires_in_ms=result.expires_in_ms;
+        await journal.save(state);
+        return state;
+      }
+      terminalState=result.state;
+    }
   } else if(result.action!=="acknowledge")throw new Error("Task reconciliation needs operator attention.");
   if(state.workspace && repositories && dataRoot && ["succeeded","blocked","failed","cancelled"].includes(terminalState)) {
     await repositories.markTerminal(state.workspace,terminalState==="succeeded"?"success":"failure");
   }
   await journal.clear();
+  return null;
 }
 
-export async function runLoop(config:Config,root:string,signal:AbortSignal):Promise<void> {
+export async function runLoop(config:Config,root:string,signal:AbortSignal,dataRoot=dirname(root)):Promise<void> {
   const api=new API(config.server,config.token);
   const journal=new Journal(root);
   const repositories=new RepositoryWorkspace();
-  await recover(api,journal,repositories,dirname(root));
+  const recovered=await recover(api,journal,repositories,dataRoot);
   const health=CodexSession.start(config.codexBinary??"codex",root);
   let authenticated=false;
   try {await health.initialize();authenticated=await health.authenticated();}finally{health.stop();}
   await api.post("/executor/heartbeat",{protocol:1,codex_authenticated:authenticated,platform:process.platform});
   if(!authenticated)throw new Error("Sign in to the official Codex CLI with your own ChatGPT account before starting this connector.");
+  if(recovered)await execute(config,api,journal,recovered,performance.now(),signal,{dataRoot,repositories});
   while(!signal.aborted) {
     try {
-      await recover(api,journal,repositories,dirname(root));
+      const interrupted=await recover(api,journal,repositories,dataRoot);
+      if(interrupted) {
+        await execute(config,api,journal,interrupted,performance.now(),signal,{dataRoot,repositories});
+        continue;
+      }
       await api.post("/executor/heartbeat",{protocol:1,codex_authenticated:true,platform:process.platform});
       const claimStarted=performance.now();
       const lease=await api.post("/executor/claim",{});
-      if(lease)await execute(config,api,journal,{lease,sequence:lease.sequence??0},claimStarted,signal,{dataRoot:dirname(root)});
+      if(lease)await execute(config,api,journal,{lease,sequence:lease.sequence??0},claimStarted,signal,{dataRoot});
     } catch(error) {
       if(signal.aborted)break;
       if(error instanceof APIError && error.status===401)throw new Error("Executor access was revoked. Pair again with an authorized owner.");
@@ -65,6 +103,7 @@ export async function runLoop(config:Config,root:string,signal:AbortSignal):Prom
 }
 
 export async function execute(config:Config,api:Transport,journal:Journal,state:JournalState,claimStarted:number,signal:AbortSignal,dependencies:ExecutionDependencies={}):Promise<void> {
+  const resuming=Boolean(state.thread_id&&state.workspace&&state.baseline);
   const controller=new AbortController();
   let session:CodexSession|undefined;
   let phase="github_installation_required";
@@ -86,42 +125,77 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
   const timeBudget=setTimeout(abort,20*60_000);
   try {
     await journal.save(state);
-    await emitDurably(api,journal,state,"started",{});
-    await emitDurably(api,journal,state,"progress",{stage:"repository_preparing"});
+    if(!resuming) {
+      await emitDurably(api,journal,state,"started",{});
+      await emitDurably(api,journal,state,"progress",{stage:"repository_preparing"});
+    } else {
+      await emitDurably(api,journal,state,"progress",{stage:"resuming_thread"});
+    }
     const dataRoot=dependencies.dataRoot??dirname(journal.root);
     const repositories=dependencies.repositories??new RepositoryWorkspace();
     await repositories.cleanupExpired(dataRoot);
     const credential=await api.post("/executor/github-token",{lease:state.lease,purpose:"checkout"});
     phase="workspace_setup_failed";
     const workspace=await repositories.prepare(dataRoot,state.lease,credential);
+    if(state.workspace && workspace.path!==state.workspace)throw new Error("Recovered task workspace changed unexpectedly.");
+    if(state.baseline && workspace.baseline!==state.baseline)throw new Error("Recovered task baseline changed unexpectedly.");
     workspacePath=workspace.path;
     const snapshot=state.lease.snapshot??{};
     const instructionsPath=await repositories.writeProjectInstructions(workspace.path,snapshot.instructions??"");
     state.workspace=workspace.path;state.baseline=workspace.baseline;await journal.save(state);
     if(controller.signal.aborted)throw new Error("Lease ended.");
-    await emitDurably(api,journal,state,"progress",{stage:"workspace_ready"});
+    if(!resuming)await emitDurably(api,journal,state,"progress",{stage:"workspace_ready"});
     phase="authentication_required";
     session=CodexSession.start(config.codexBinary??"codex",workspace.path);
     await session.initialize();
     if(!await session.authenticated())throw new Error("Local account is not signed in.");
     phase="execution_failed";
     const prompt=[
-      "Implement this development task end to end in this isolated checkout.",
+      resuming
+        ? "Continue the existing development task in this isolated checkout from the current workspace state. Do not repeat completed work; inspect the repository and continue from the existing Codex conversation."
+        : "Implement this development task end to end in this isolated checkout.",
       "Read and respect the repository's AGENTS.md and project-scoped skills. Do not change global skills or configuration.",
       "Validate changes and create a Conventional Commit on the existing issue branch. Do not push, create a PR, merge, or deploy: the trusted connector handles publication after your turn.",
-      "Do not invent external access or credentials. If essential context is missing, report a real blocker. Network access is disabled in this evaluation sandbox.",
+      "Do not invent external access or credentials. If essential context is missing, report a real blocker. Network access is restricted: only an exact host in the immutable task policy may be enabled for a specific command; all other hosts remain denied.",
       instructionsPath
         ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
         : "Project instructions:\n"+String(snapshot.instructions??""),
       "Task: "+String(state.lease.title??""),String(state.lease.prompt??"")
     ].join("\n\n");
+    let activityWrites = Promise.resolve();
+    let contextExpired=false;
+    const writeEvent = (kind:string,data:Record<string,unknown>) => {
+      activityWrites = activityWrites.then(() => emitDurably(api,journal,state,kind,data));
+      return activityWrites;
+    };
     await session.run(
       workspace.path,
       prompt,
       typeof snapshot.model==="string"?snapshot.model:undefined,
       controller.signal,
-      stage=>emitDurably(api,journal,state,"progress",{stage})
+      stage=>writeEvent("progress",{stage}),
+      event=>writeEvent("activity",{event}),
+      snapshot.execution_policy,
+      {
+        threadId:state.thread_id,
+        onThreadStarted:async threadId=>{state.thread_id=threadId;await journal.save(state);},
+        onUserInput:async params=>{
+          await writeEvent("progress",{stage:"waiting_for_context"});
+          let result:{response:unknown;expired:boolean};
+          try {
+            result=await waitForClarification(api,state.lease,params,controller.signal);
+          } catch(error) {
+            if(controller.signal.aborted)throw error;
+            result={response:{answers:{}},expired:true};
+          }
+          contextExpired=contextExpired||result.expired;
+          await writeEvent("progress",{stage:"working"});
+          return result.response;
+        }
+      }
     );
+    await activityWrites;
+    if(contextExpired)throw new CodexBlockedError("Clarification expired before the owner responded.");
     session.stop();session=undefined;
     phase="publication_failed";
     await api.post("/executor/renew",state.lease);
@@ -150,6 +224,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     else if(error instanceof Error && /Selected base branch does not resolve to a commit/i.test(error.message))phase="base_branch_missing";
     else if(error instanceof Error && /Repository setup failed|worktree|managed repository cache|Task repository snapshot/i.test(error.message))phase="workspace_setup_failed";
     if(error instanceof CodexBlockedError)phase="missing_context";
+    if(error instanceof CodexPolicyError)phase="local_policy_denied";
     const fingerprint=error instanceof RepeatedFailureError?error.fingerprint:createHash("sha256").update(phase+":"+(error instanceof Error?error.message:"unknown")).digest("hex");
     const kind=["authentication_required","local_policy_denied","github_installation_required","github_permission_denied","base_branch_missing","missing_context","workspace_setup_failed"].includes(phase)?"blocked":"failure";
     const acknowledgement=await emitDurably(api,journal,state,kind,{category:phase,fingerprint,occurrences:error instanceof RepeatedFailureError?3:1});

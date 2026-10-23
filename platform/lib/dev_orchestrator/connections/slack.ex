@@ -113,4 +113,45 @@ defmodule DevOrchestrator.Connections.Slack do
 
     %{channel: channel, text: text, blocks: blocks, unfurl_links: false, unfurl_media: false}
   end
+
+  def clarification(payload, channel) do
+    question_text =
+      payload["questions"]
+      |> Enum.map_join("\n", fn question ->
+        options =
+          case question["options"] do
+            values when is_list(values) and values != [] ->
+              "\nOptions: " <> Enum.map_join(values, ", ", & &1["label"])
+
+            _ ->
+              ""
+          end
+
+        "• *" <> question["header"] <> "* — " <> question["question"] <> options
+      end)
+      |> String.slice(0, 2_500)
+
+    text = "A task needs your input: " <> String.slice(payload["title"] || "Task", 0, 200)
+
+    %{
+      channel: channel,
+      text: text,
+      blocks: [
+        %{type: "section", text: %{type: "plain_text", text: text <> "\n" <> question_text}},
+        %{
+          type: "actions",
+          elements: [
+            %{
+              type: "button",
+              text: %{type: "plain_text", text: "Provide context"},
+              url: payload["url"],
+              action_id: "open_clarification"
+            }
+          ]
+        }
+      ],
+      unfurl_links: false,
+      unfurl_media: false
+    }
+  end
 end
