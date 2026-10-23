@@ -26,7 +26,7 @@ export class AppServerClient extends EventEmitter {
     child.on("error", (error: NodeJS.ErrnoException) => {
       const executable = error.path ?? "codex";
       const code = error.code ?? "unknown error";
-      this.fail(new Error(`Codex executable ${executable} could not start (${code}). Check that it is installed and available in the connector's PATH.`));
+      this.fail(new Error(`Codex executable ${executable} could not start (${code}). Check the executable in PATH and that its working directory exists.`));
     });
     child.on("close", code => this.fail(new Error(code === 0 ? "Codex app-server stopped." : "Codex app-server exited unexpectedly.")));
   }

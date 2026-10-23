@@ -56,9 +56,9 @@ test("JSON-RPC server errors reject only their matching request", async () => {
   } finally { client.close(); }
 });
 
-test("missing Codex binary reports the executable and operating-system error", async () => {
+test("missing Codex binary reports the executable, error code, and possible missing working directory", async () => {
   const session = AppServerSession.open({ binary: "missing-codex-test-binary", cwd: process.cwd() });
   try {
-    await assert.rejects(session.initialize(), /missing-codex-test-binary.*ENOENT/);
+    await assert.rejects(session.initialize(), /missing-codex-test-binary.*ENOENT.*working directory/);
   } finally { session.close(); }
 });
