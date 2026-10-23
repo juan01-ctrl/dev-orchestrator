@@ -35,6 +35,22 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       get_in(issue, ["state", "name"]) in (project["active_states"] || ["Todo", "In Progress"])
   end
 
+  def remove_issue(project, issue_id) when is_binary(issue_id) do
+    Store.transaction(fn ->
+      lifecycle =
+        Store.one(
+          "SELECT * FROM linear_issue_lifecycles WHERE project_id=$1 AND issue_id=$2 FOR UPDATE",
+          [project["id"], issue_id]
+        )
+
+      deactivate(
+        project,
+        %{"id" => issue_id, "state" => %{"name" => "Removed"}},
+        lifecycle
+      )
+    end)
+  end
+
   defp activate(project, issue, nil) do
     create_activation(project, issue, 1)
   end
@@ -45,6 +61,13 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       [project["id"], issue["id"], get_in(issue, ["state", "name"])]
     )
 
+    {title, prompt} = task_context(issue)
+
+    Store.exec(
+      "UPDATE runs SET title=$3,prompt=$4,issue_url=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND state='queued' AND executor_id IS NULL AND sequence=0",
+      [previous["run_id"], project["organization_id"], title, prompt, issue["url"]]
+    )
+
     %{result: :unchanged, activation: previous["activation"]}
   end
 
@@ -53,15 +76,7 @@ defmodule DevOrchestrator.Runs.Lifecycle do
   end
 
   defp create_activation(project, issue, activation) do
-    prompt =
-      String.slice((issue["title"] || "") <> "\n\n" <> (issue["description"] || ""), 0, 8_000)
-
-    title =
-      String.slice(
-        (issue["identifier"] || "Issue") <> " — " <> (issue["title"] || "Development task"),
-        0,
-        240
-      )
+    {title, prompt} = task_context(issue)
 
     source_key = "linear:" <> issue["id"] <> ":" <> Integer.to_string(activation)
 
@@ -89,6 +104,20 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       run_id: run["id"],
       activation: activation
     }
+  end
+
+  defp task_context(issue) do
+    prompt =
+      String.slice((issue["title"] || "") <> "\n\n" <> (issue["description"] || ""), 0, 8_000)
+
+    title =
+      String.slice(
+        (issue["identifier"] || "Issue") <> " — " <> (issue["title"] || "Development task"),
+        0,
+        240
+      )
+
+    {title, prompt}
   end
 
   defp deactivate(_project, _issue, nil), do: %{result: :unchanged, activation: 0}

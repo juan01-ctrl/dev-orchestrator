@@ -153,6 +153,38 @@ defmodule DevOrchestrator.Accounts do
     :ok
   end
 
+  def request_verification(email) when is_binary(email) do
+    email = String.downcase(String.trim(email))
+
+    if user = Store.one("SELECT id,email,verified_at FROM users WHERE email=$1", [email]) do
+      if is_nil(user["verified_at"]) do
+        Store.transaction(fn ->
+          Store.exec("DELETE FROM account_tokens WHERE user_id=$1 AND purpose='verify'", [
+            user["id"]
+          ])
+
+          issue_token(user["id"], "verify", 3600)
+        end)
+        |> case do
+          {:ok, token} ->
+            Notifier.account_link(
+              user["email"],
+              :account_verification,
+              "Verify your email",
+              "/verify/" <> token
+            )
+
+          _ ->
+            :ok
+        end
+      end
+    end
+
+    :ok
+  end
+
+  def request_verification(_), do: :ok
+
   def reset_password(token, password) when is_binary(token) and is_binary(password) do
     if String.length(password) >= 12 and byte_size(password) <= 1024 do
       Store.transaction(fn ->

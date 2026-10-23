@@ -28,6 +28,7 @@ defmodule DevOrchestrator.MixProject do
       {:phoenix, "~> 1.8.4"},
       {:phoenix_live_view, "~> 1.1"},
       {:phoenix_html, "~> 4.2"},
+      {:plug_crypto, "~> 2.2.1"},
       {:bandit, "~> 1.10"},
       {:ecto_sql, "~> 3.13"},
       {:postgrex, "~> 0.21"},

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { publicEventFromNotification } from "../../src/app-server/events.ts";
+import { publicEventFromNotification, StreamingRedactor } from "../../src/app-server/events.ts";
 
 test("agent message deltas are surfaced while reasoning and command output stay private", () => {
   assert.deepEqual(publicEventFromNotification({
@@ -37,4 +37,12 @@ test("public agent updates redact credentials and local filesystem paths", () =>
     method: "item/agentMessage/delta",
     params: { threadId: "thread-1", delta: "Updated /Users/juan/project with ghp_123456789012345678901234567890" }
   }, "thread-1"), { kind: "message_delta", text: "Updated [local path] with [redacted]" });
+});
+
+test("streaming redaction retains split credential fragments until they are safe", () => {
+  const redactor = new StreamingRedactor();
+  assert.equal(redactor.push("Working with gh"), "Working with ");
+  assert.equal(redactor.push("p_1234567890"), "");
+  assert.equal(redactor.push("12345678901234567890 finished"), "[redacted] finished");
+  assert.equal(redactor.flush(), "");
 });

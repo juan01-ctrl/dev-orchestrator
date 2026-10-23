@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, realpath } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, realpath, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Journal } from "../src/journal.ts";
@@ -37,6 +37,19 @@ test("a lease with no pending result is reconciled, never automatically re-execu
     await journal.save({lease:{id:"run-1",generation:1,lifecycle:1},sequence:1});
     await recover({post:async(path:string)=>{assert.equal(path,"/executor/reconcile");return {action:"acknowledge",state:"blocked"};}},journal);
     assert.equal(await journal.load(),null);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("superseded work is archived and no longer blocks the connector slot",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"orchestrator-superseded-"));
+  try {
+    const journal=new Journal(root);
+    await journal.save({lease:{id:"run-old",generation:1,lifecycle:1},sequence:2,workspace:"/preserved/workspace"});
+    await recover({post:async()=>({action:"archive",state:"queued",reason:"superseded"})},journal);
+    assert.equal(await journal.load(),null);
+    const archives=await readdir(join(root,"archive"));
+    assert.equal(archives.length,1);
+    assert.match(await readFile(join(root,"archive",archives[0]),"utf8"),/run-old/);
   } finally {await rm(root,{recursive:true,force:true});}
 });
 
@@ -180,7 +193,7 @@ const prompt=message.params.input[0].text;
     assert.match(result.prompt,/trusted connector creates the commit/);
     assert.match(result.status,/README\.md/);
     assert.deepEqual(events.filter(event=>event.kind!=="activity").map(event=>event.kind==="progress"?event.data.stage:event.kind),[
-      "started","repository_preparing","workspace_ready","agent_started","editing","validating","checks_passed","publishing","pr_verifying","candidate"
+      "started","repository_preparing","workspace_ready","agent_started","editing","validating","publishing","pr_verifying","candidate"
     ]);
     assert.ok(events.some(event=>event.kind==="activity"));
     assert.deepEqual(events.at(-1)?.data.repository,"acme/app");

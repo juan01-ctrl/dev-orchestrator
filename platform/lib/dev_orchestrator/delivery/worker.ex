@@ -31,7 +31,6 @@ defmodule DevOrchestrator.Delivery.Worker do
     case Outbox.claim() do
       {:ok, row} when is_map(row) ->
         deliver_row(row)
-        drain_slot()
 
       _ ->
         :ok
@@ -105,7 +104,7 @@ defmodule DevOrchestrator.Delivery.Worker do
                get_in(issue, ["team", "states", "nodes"]),
                &(&1["name"] == payload["snapshot"]["review_state"])
              ),
-           {:ok, _} <-
+           {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}} <-
              Linear.query(
                token,
                "mutation($id:String!,$input:IssueUpdateInput!){issueUpdate(id:$id,input:$input){success}}",
@@ -126,7 +125,7 @@ defmodule DevOrchestrator.Delivery.Worker do
                    }
                  }
                ) do
-            {:ok, _} -> :ok
+            {:ok, %{"data" => %{"attachmentCreate" => %{"success" => true}}}} -> :ok
             _ -> :rejected
           end
         else

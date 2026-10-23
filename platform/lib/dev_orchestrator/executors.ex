@@ -1,5 +1,5 @@
 defmodule DevOrchestrator.Executors do
-  alias DevOrchestrator.{Accounts, Store, Projects, RateLimit}
+  alias DevOrchestrator.{Accounts, Store, Projects, RateLimit, Runs}
 
   def list(scope),
     do:
@@ -88,19 +88,25 @@ defmodule DevOrchestrator.Executors do
 
   def revoke(scope, id) do
     if Accounts.owner?(scope) do
-      Store.exec("UPDATE executors SET revoked_at=now() WHERE id=$1 AND organization_id=$2", [
-        id,
-        scope.organization_id
-      ])
+      case Store.transaction(fn ->
+             executor =
+               Store.one(
+                 "UPDATE executors SET revoked_at=now() WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL RETURNING *",
+                 [id, scope.organization_id]
+               ) || Store.halt(:not_found)
 
-      :ok
+             Runs.executor_revoked(executor)
+           end) do
+        {:ok, :ok} -> :ok
+        error -> error
+      end
     else
       {:error, :forbidden}
     end
   end
 
   def heartbeat(executor, capabilities) do
-    safe = Map.take(capabilities, ~w(protocol codex_authenticated platform))
+    safe = Map.take(capabilities, ~w(protocol codex_authenticated platform active_slots capacity))
 
     Store.exec(
       "UPDATE executors SET last_seen_at=now(),capabilities=$2 WHERE id=$1 AND revoked_at IS NULL",

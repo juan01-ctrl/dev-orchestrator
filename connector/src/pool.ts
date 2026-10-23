@@ -17,9 +17,7 @@ export async function runSlots(capacity: number, signal: AbortSignal, worker: (s
   const stop = () => controller.abort();
   signal.addEventListener("abort", stop, { once: true });
   try {
-    const results = await Promise.allSettled(Array.from({ length: capacity }, (_, index) => worker(index + 1, controller.signal)));
-    const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
-    if (failed) throw failed.reason;
+    await Promise.all(Array.from({ length: capacity }, (_, index) => worker(index + 1, controller.signal)));
   } finally {
     controller.abort();
     signal.removeEventListener("abort", stop);

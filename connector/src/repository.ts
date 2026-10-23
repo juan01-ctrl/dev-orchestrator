@@ -96,7 +96,7 @@ export class RepositoryWorkspace {
     this.runCommand=options.runCommand??command;
   }
 
-  async prepare(root:string,lease:Lease,credential:GitHubCredential):Promise<{path:string;branch:string;baseline:string}> {
+  async prepare(root:string,lease:Lease,credential:GitHubCredential):Promise<{path:string;branch:string;baseline:string;gitDir:string;commonDir:string}> {
     const projectId=lease.project_id;
     const repository=lease.snapshot?.repository;
     const baseBranch=lease.snapshot?.base_branch;
@@ -147,7 +147,7 @@ export class RepositoryWorkspace {
             ? await readMarker(workspace,cache)
             : await this.recoverIncompleteWorktree(git,workspace,cache,lease,repository,baseBranch,baseline,branch,credential,gitdir);
           if(marker.run!==lease.id || marker.lifecycle!==lease.lifecycle || marker.project!==projectId || marker.repository!==repository || marker.base_branch!==baseBranch || marker.branch!==branch || !validSHA(marker.baseline))throw new Error("Existing task worktree identity does not match this lease.");
-          return {path:workspace,branch,baseline:marker.baseline};
+          return {path:workspace,branch,baseline:marker.baseline,gitDir:gitdir,commonDir:cache};
         }
 
         stage="workspace_creation";
@@ -158,7 +158,7 @@ export class RepositoryWorkspace {
         await git(["-C",workspace,"config","core.hooksPath","/dev/null"]);
         const gitdir=await worktreeGitDirectory(workspace,cache);
         await writeFile(join(gitdir,"orchestrator.json"),JSON.stringify({run:lease.id,lifecycle:lease.lifecycle,project:projectId,repository,base_branch:baseBranch,baseline,branch} satisfies Marker),{mode:0o600,flag:"wx"});
-        return {path:workspace,branch,baseline};
+        return {path:workspace,branch,baseline,gitDir:gitdir,commonDir:cache};
       });
     } catch(error) {
       if(error instanceof GitHubCredentialFailure) {
@@ -326,6 +326,12 @@ export class RepositoryWorkspace {
         const retention=terminal.outcome==="success"?24*60*60_000:7*24*60*60_000;
         if(now-terminal.recorded_at<retention)continue;
         if(await realpath(cache)!==cache)continue;
+        const status=await this.runCommand(
+          "git",
+          ["-C",workspace,"-c","core.hooksPath=/dev/null","-c","core.attributesFile=/dev/null","status","--porcelain","--untracked-files=all"],
+          {env:{PATH:process.env.PATH,HOME:process.env.HOME,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},timeout:30_000}
+        );
+        if(status.output.trim()!=="")continue;
         const release=await acquireLock(cache+".lock");
         try {
           await this.runCommand("git",["--git-dir",cache,"-c","core.hooksPath=/dev/null","worktree","remove","--force",workspace],{env:{PATH:process.env.PATH,HOME:process.env.HOME,GIT_CONFIG_NOSYSTEM:"1",GIT_CONFIG_GLOBAL:"/dev/null"},timeout:30_000});

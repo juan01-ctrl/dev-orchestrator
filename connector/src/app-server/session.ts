@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { AppServerClient } from "./client.ts";
-import { publicEventFromNotification, type PublicExecutionEvent } from "./events.ts";
+import { publicEventFromNotification, StreamingRedactor, type PublicExecutionEvent } from "./events.ts";
 import { resolveServerRequest, type RequestHandlers } from "./requests.ts";
 import { activityForNotification, type ActivityStage } from "../activity.ts";
 import type { TaskResult } from "../task-result.ts";
@@ -33,6 +33,7 @@ export class AppServerSession extends EventEmitter {
   private progressQueue = Promise.resolve();
   private lastStage?: ActivityStage;
   private handlers: RequestHandlers;
+  private publicRedactor = new StreamingRedactor();
 
   constructor(child: ChildProcessWithoutNullStreams, requestHandlers: RequestHandlers = {}) {
     super();
@@ -115,6 +116,7 @@ export class AppServerSession extends EventEmitter {
     if (!this.threadId) return Promise.reject(new Error("Start or resume a Codex thread before running a turn."));
     if (this.activeTurn) return Promise.reject(new Error("A Codex turn is already active in this session."));
     this.progress = options.onProgress;
+    this.publicRedactor = new StreamingRedactor();
     this.lastStage = undefined;
     const threadId = this.threadId;
     const completed = new Promise<TurnResult>((resolve, reject) => { this.activeTurn = { threadId, resolve, reject }; });
@@ -129,7 +131,11 @@ export class AppServerSession extends EventEmitter {
     const params = message?.params;
     if (!params || params.threadId !== this.threadId) return;
     this.emit("notification", message);
-    const publicEvent = publicEventFromNotification(message, this.threadId!);
+    if (message.method === "turn/completed") {
+      const remainder = this.publicRedactor.flush();
+      if (remainder) this.emit("event", { kind: "message_delta", text: remainder } satisfies PublicExecutionEvent);
+    }
+    const publicEvent = publicEventFromNotification(message, this.threadId!, this.publicRedactor);
     if (publicEvent) this.emit("event", publicEvent satisfies PublicExecutionEvent);
     const stage = activityForNotification(message);
     if (stage && stage !== this.lastStage) {

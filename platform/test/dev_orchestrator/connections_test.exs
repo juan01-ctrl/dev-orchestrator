@@ -152,7 +152,7 @@ defmodule DevOrchestrator.ConnectionsTest do
       |> get("/connections/slack/callback?state=#{URI.encode_www_form(state)}&code=code")
 
     assert redirected_to(conn) == "/app/projects/" <> project.id
-    assert Phoenix.Controller.get_flash(conn, :info) =~ "Choose a destination channel"
+    assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Choose a destination channel"
   end
 
   test "unconfigured providers do not authorize or create fake connections" do

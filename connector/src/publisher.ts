@@ -6,7 +6,7 @@ import { withGitHubCredential, validateGitHubCredential } from "./git-credential
 import type { GitHubCredential } from "./types.ts";
 import { validBranch, validRepository } from "./workspace.ts";
 
-export type PublicationContext={workspace:string;repository:string;baseBranch:string;branch:string;baseline:string};
+export type PublicationContext={workspace:string;repository:string;baseBranch:string;branch:string;baseline:string;gitDir:string;commonDir:string};
 type Dependencies={runCommand?:typeof command;apiFetch?:typeof fetch;remoteURL?:(repository:string)=>string};
 const validSHA=(sha:string)=>/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha);
 
@@ -17,7 +17,7 @@ export class Publisher {
   private readonly remoteURL:(repository:string)=>string;
 
   constructor(context:PublicationContext,dependencies:Dependencies={}) {
-    if(!validRepository(context.repository) || !validBranch(context.branch) || !validBranch(context.baseBranch) || context.branch===context.baseBranch || !context.branch.startsWith("task/") || !validSHA(context.baseline))throw new Error("Invalid publication context.");
+    if(!validRepository(context.repository) || !validBranch(context.branch) || !validBranch(context.baseBranch) || context.branch===context.baseBranch || !context.branch.startsWith("task/") || !validSHA(context.baseline) || !context.gitDir || !context.commonDir)throw new Error("Invalid publication context.");
     this.context=context;
     this.runCommand=dependencies.runCommand??command;
     this.apiFetch=dependencies.apiFetch??fetch;
@@ -58,8 +58,8 @@ export class Publisher {
       const next=(await git(["commit-tree",tree,"-p",sha,"-m",`chore: deliver ${identifier}`],false,authorEnv)).output;
       if(!validSHA(next))throw new Error("Invalid task commit.");
       const env=cleanGitEnv();
-      await this.runCommand("git",["--git-dir",gitDir,"--work-tree",this.context.workspace,"read-tree",next],{env,signal});
-      await this.runCommand("git",["--git-dir",commonDir,"update-ref",`refs/heads/${this.context.branch}`,next,sha],{env,signal});
+      await this.runCommand("git",["--git-dir",gitDir,"--work-tree",this.context.workspace,"-c","core.hooksPath=/dev/null","-c","core.attributesFile=/dev/null","read-tree",next],{env,signal});
+      await this.runCommand("git",["--git-dir",commonDir,"-c","core.hooksPath=/dev/null","update-ref",`refs/heads/${this.context.branch}`,next,sha],{env,signal});
       return {changed:next!==this.context.baseline,commit:next};
     },signal);
   }
@@ -130,20 +130,16 @@ export class Publisher {
     const pointer=join(workspace,".git");
     const stat=await lstat(pointer);
     if(stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile()))throw new Error("Publication needs valid Git metadata.");
-    let gitDir:string;
-    let commonDir:string;
-    if(stat.isDirectory()) {
-      gitDir=workspace+sep+".git";
-      commonDir=gitDir;
-    } else {
-      const content=await readFile(pointer,"utf8");
-      const match=content.match(/^gitdir: (.+)\r?\n?$/);
-      if(!match)throw new Error("Publication needs valid Git worktree metadata.");
-      gitDir=await realpath(resolve(workspace,match[1]));
-      commonDir=await realpath(join(gitDir,"..",".."));
-      const worktrees=await realpath(join(commonDir,"worktrees"));
-      if(!gitDir.startsWith(worktrees+sep) || gitDir.slice(worktrees.length+1).includes(sep))throw new Error("Publication worktree metadata escaped its repository.");
-    }
+    if(stat.isDirectory())throw new Error("Publication requires connector-managed Git metadata.");
+    const content=await readFile(pointer,"utf8");
+    const match=content.match(/^gitdir: (.+)\r?\n?$/);
+    if(!match)throw new Error("Publication needs valid Git worktree metadata.");
+    const pointerGitDir=await realpath(resolve(workspace,match[1]));
+    const gitDir=await realpath(this.context.gitDir);
+    const commonDir=await realpath(this.context.commonDir);
+    if(pointerGitDir!==gitDir || await realpath(join(gitDir,"..",".."))!==commonDir)throw new Error("Task Git metadata changed after workspace preparation.");
+    const worktrees=await realpath(join(commonDir,"worktrees"));
+    if(!gitDir.startsWith(worktrees+sep) || gitDir.slice(worktrees.length+1).includes(sep))throw new Error("Publication worktree metadata escaped its repository.");
     const objects=await realpath(join(commonDir,"objects"));
     if(!objects.startsWith(commonDir+sep))throw new Error("Publication needs an internal Git object directory.");
     for(const forbidden of ["info/alternates","info/http-alternates"]) {
@@ -174,7 +170,7 @@ export class Publisher {
         await writeFile(join(bare,"shallow"),shallow,{mode:0o600});
       } catch(error) {if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
       const env={...cleanGitEnv(),GIT_OBJECT_DIRECTORY:objects};
-      const git=(args:string[],allowExitOne=false,commandEnv:NodeJS.ProcessEnv=env)=>this.runCommand("git",["--git-dir",bare,"--work-tree",workspace,"-c","core.bare=false","-c","core.hooksPath=/dev/null",...args],{cwd:temporary,env:commandEnv,signal,allowExitOne});
+      const git=(args:string[],allowExitOne=false,commandEnv:NodeJS.ProcessEnv=env)=>this.runCommand("git",["--git-dir",bare,"--work-tree",workspace,"-c","core.bare=false","-c","core.hooksPath=/dev/null","-c","core.attributesFile=/dev/null","-c","filter.lfs.clean=cat","-c","filter.lfs.smudge=cat","-c","filter.lfs.required=false",...args],{cwd:temporary,env:commandEnv,signal,allowExitOne});
       await git(["read-tree",sha]);
       return await fn(git,sha,temporary,objects,gitDir,commonDir);
     } finally {await rm(temporary,{recursive:true,force:true});}

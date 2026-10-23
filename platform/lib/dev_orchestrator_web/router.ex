@@ -34,6 +34,8 @@ defmodule DevOrchestratorWeb.Router do
     get("/verify/:token", AccountController, :verify)
     get("/forgot", AccountController, :forgot)
     post("/forgot", AccountController, :send_reset)
+    get("/resend-verification", AccountController, :resend)
+    post("/resend-verification", AccountController, :send_verification)
     get("/reset/:token", AccountController, :reset)
     post("/reset/:token", AccountController, :update_password)
   end

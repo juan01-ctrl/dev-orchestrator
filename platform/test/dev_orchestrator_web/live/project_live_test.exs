@@ -20,7 +20,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(build_conn(), "/app")
   end
 
-  test "executor page provides copyable install, pairing, and run commands" do
+  test "executor page provides copyable pairing and run commands" do
     scope = owner("executor-commands@example.test")
     {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
     conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
@@ -29,9 +29,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     view |> element("button[phx-click='pair']") |> render_click()
 
     pairing_html = render(view)
-    assert pairing_html =~ "npm i --prefix \"$HOME/.local/share/dev-orchestrator\" dev-orchestrator-connector"
-    assert pairing_html =~ "aria-label=\"Copy installation command\""
-    assert pairing_html =~ "$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector pair"
+    assert pairing_html =~ "npx --yes dev-orchestrator-connector@0.1.3 pair"
     assert pairing_html =~ "aria-label=\"Copy pairing command\""
 
     {:ok, enrollment_code} = DevOrchestrator.Executors.create_enrollment(scope)
@@ -42,7 +40,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert {:ok, _executor} = DevOrchestrator.Executors.authenticate(executor_token)
 
     {:ok, _view, html} = live(conn, "/app/executors")
-    assert html =~ "$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector run"
+    assert html =~ "npx --yes dev-orchestrator-connector@0.1.3 run"
     assert html =~ "aria-label=\"Copy start command\""
   end
 
@@ -261,6 +259,10 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
     {:ok, %{token: token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
     {:ok, _executor} = DevOrchestrator.Executors.authenticate(token)
+
+    {:ok, _project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
     {:ok, session_token} = Accounts.login(scope.email, "a-long-test-password")
     conn = build_conn() |> Plug.Test.init_test_session(%{session_token: session_token})
 
@@ -410,7 +412,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     refute html =~ "Install GitHub App"
   end
 
-  test "an existing GitHub connection is shown as connected instead of asking to connect again" do
+  test "an existing GitHub connection is shown as connected and offers reconnect" do
     configure_github_app()
     scope = owner("github-connected-ui@example.test")
 
@@ -440,7 +442,8 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, _view, html} = live(conn, "/app/projects/" <> project.id)
 
     assert html =~ "GitHub connected"
-    refute html =~ ~s(action="/connections/github/start")
+    assert html =~ ~s(action="/connections/github/start")
+    assert html =~ "Reconnect GitHub"
     refute html =~ "Install GitHub App"
   end
 

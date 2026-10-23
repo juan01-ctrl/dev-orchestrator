@@ -37,7 +37,15 @@ defmodule DevOrchestrator.Intake.Reconciler do
            projects when projects != [] <- projects_for(connection_id),
            {:ok, cursor} <- load_cursor(connection_id) do
         teams = projects |> Enum.map(& &1["linear_team"]) |> Enum.reject(&is_nil/1) |> Enum.uniq()
-        if teams == [], do: :ok, else: fetch_pages(connection, token, projects, teams, cursor, 0)
+
+        if teams == [] do
+          :ok
+        else
+          case fetch_pages(connection, token, projects, teams, cursor, 0) do
+            :ok -> revalidate_tracked(token, projects)
+            error -> error
+          end
+        end
       else
         nil -> :ok
         [] -> :ok
@@ -121,6 +129,50 @@ defmodule DevOrchestrator.Intake.Reconciler do
       _ ->
         save_cursor(connection["id"], cursor.updated_at, cursor.page, "provider_rejected")
         {:error, :provider_rejected}
+    end
+  end
+
+  defp revalidate_tracked(token, projects) do
+    tracked =
+      Store.rows(
+        "SELECT l.project_id,l.issue_id FROM linear_issue_lifecycles l JOIN projects p ON p.id=l.project_id WHERE l.is_active=true AND l.project_id=ANY($1::text[]) ORDER BY l.updated_at LIMIT 100",
+        [Enum.map(projects, & &1["id"])]
+      )
+
+    ids = tracked |> Enum.map(& &1["issue_id"]) |> Enum.uniq()
+
+    if ids == [] do
+      :ok
+    else
+      query =
+        "query($filter:IssueFilter){issues(first:100,filter:$filter){nodes{id identifier title description url state{name} team{id} project{id}}}}"
+
+      case Linear.query(token, query, %{"filter" => %{"id" => %{"in" => ids}}}) do
+        {:ok, %{"data" => %{"issues" => %{"nodes" => issues}}}} when is_list(issues) ->
+          visible = MapSet.new(issues, & &1["id"])
+          projects_by_id = Map.new(projects, &{&1["id"], &1})
+
+          Enum.each(issues, fn issue ->
+            Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
+          end)
+
+          Enum.each(tracked, fn item ->
+            if not MapSet.member?(visible, item["issue_id"]) do
+              DevOrchestrator.Runs.Lifecycle.remove_issue(
+                projects_by_id[item["project_id"]],
+                item["issue_id"]
+              )
+            end
+          end)
+
+          :ok
+
+        {:error, _} = error ->
+          error
+
+        _ ->
+          {:error, :provider_rejected}
+      end
     end
   end
 
