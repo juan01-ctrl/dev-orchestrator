@@ -49,8 +49,20 @@ test("repository setup reports its failing stage without logging credential mate
   try {
     const manager=new RepositoryWorkspace();
     await assert.rejects(manager.prepare(root,lease("22222222-2222-4222-8222-222222222222"),{...credential,token:"secret value"}));
-    assert.match(logs.join("\n"),/credential_setup/);
+    assert.match(logs.join("\n"),/credential_setup: invalid_token_format/);
     assert.doesNotMatch(logs.join("\n"),/secret value/);
+  } finally {console.error=original;await rm(root,{recursive:true,force:true});}
+});
+
+test("repository setup distinguishes an expired GitHub token from local storage errors",async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-repository-expired-")));
+  const original=console.error;
+  const logs:string[]=[];
+  console.error=(...values:unknown[])=>logs.push(values.map(String).join(" "));
+  try {
+    const manager=new RepositoryWorkspace();
+    await assert.rejects(manager.prepare(root,lease("22222222-2222-4222-8222-222222222222"),{...credential,expires_at:"2020-01-01T00:00:00Z"}));
+    assert.match(logs.join("\n"),/credential_setup: expired_token/);
   } finally {console.error=original;await rm(root,{recursive:true,force:true});}
 });
 

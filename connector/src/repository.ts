@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { command, CommandFailure } from "./process.ts";
-import { withGitHubCredential } from "./git-credential.ts";
+import { GitHubCredentialFailure, withGitHubCredential } from "./git-credential.ts";
 import type { GitHubCredential, Lease } from "./types.ts";
 import { validBranch, validRepository } from "./workspace.ts";
 
@@ -152,6 +152,10 @@ export class RepositoryWorkspace {
         return {path:workspace,branch,baseline};
       });
     } catch(error) {
+      if(error instanceof GitHubCredentialFailure) {
+        console.error(`Repository preparation failed at ${stage}: ${error.reason}.`);
+        throw new RepositoryPreparationFailure("workspace_setup_failed");
+      }
       if(error instanceof CommandFailure) {
         const reason=error.reason;
         const category:RepositoryFailureCategory=reason==="access_denied"?"github_permission_denied":reason==="network"?"github_unavailable":reason==="missing_ref"?"base_branch_missing":"workspace_setup_failed";

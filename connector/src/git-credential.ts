@@ -3,14 +3,24 @@ import { join } from "node:path";
 import type { GitHubCredential } from "./types.ts";
 import { cleanGitEnv } from "./process.ts";
 
+export type GitHubCredentialFailureReason="unavailable"|"invalid_token_format"|"invalid_expiration"|"expired_token"|"invalid_author";
+export class GitHubCredentialFailure extends Error {
+  readonly reason:GitHubCredentialFailureReason;
+  constructor(reason:GitHubCredentialFailureReason) {
+    super("GitHub authorization is invalid or expired.");
+    this.reason=reason;
+  }
+}
+
 export function validateGitHubCredential(value: unknown): asserts value is GitHubCredential {
-  if (!value || typeof value !== "object") throw new Error("GitHub authorization is unavailable.");
+  if (!value || typeof value !== "object") throw new GitHubCredentialFailure("unavailable");
   const credential=value as Partial<GitHubCredential>;
-  if (typeof credential.token!=="string" || !/^[A-Za-z0-9_-]+$/.test(credential.token) ||
-      typeof credential.expires_at!=="string" || !Number.isFinite(Date.parse(credential.expires_at)) || Date.parse(credential.expires_at)<=Date.now() ||
-      typeof credential.author_name!=="string" || !credential.author_name || credential.author_name.length>200 || /[\r\n]/.test(credential.author_name) ||
+  if (typeof credential.token!=="string" || !/^[A-Za-z0-9_-]+$/.test(credential.token))throw new GitHubCredentialFailure("invalid_token_format");
+  if (typeof credential.expires_at!=="string" || !Number.isFinite(Date.parse(credential.expires_at)))throw new GitHubCredentialFailure("invalid_expiration");
+  if (Date.parse(credential.expires_at)<=Date.now())throw new GitHubCredentialFailure("expired_token");
+  if (typeof credential.author_name!=="string" || !credential.author_name || credential.author_name.length>200 || /[\r\n]/.test(credential.author_name) ||
       typeof credential.author_email!=="string" || !credential.author_email || credential.author_email.length>254 || /[\r\n]/.test(credential.author_email)) {
-    throw new Error("GitHub authorization is invalid or expired.");
+    throw new GitHubCredentialFailure("invalid_author");
   }
 }
 
