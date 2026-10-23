@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { mkdir } from "node:fs/promises";
 import type { Config } from "./types.ts";
 import { runLoop } from "./worker.ts";
 
@@ -26,7 +27,9 @@ export async function runSlots(capacity: number, signal: AbortSignal, worker: (s
 }
 
 export async function runPool(config: Config, runtimeRoot: string, signal: AbortSignal, capacity = slotCapacity()): Promise<void> {
-  await runSlots(capacity, signal, (slot, slotSignal) =>
-    runLoop(config, join(runtimeRoot, "slots", String(slot)), slotSignal, runtimeRoot)
-  );
+  await runSlots(capacity, signal, async (slot, slotSignal) => {
+    const slotRoot = join(runtimeRoot, "slots", String(slot));
+    await mkdir(slotRoot, { recursive: true, mode: 0o700 });
+    await runLoop(config, slotRoot, slotSignal, runtimeRoot);
+  });
 }
