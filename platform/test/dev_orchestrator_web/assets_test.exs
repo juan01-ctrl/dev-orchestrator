@@ -28,4 +28,15 @@ defmodule DevOrchestratorWeb.AssetsTest do
     assert conn.resp_body =~ "navigator.clipboard.writeText"
     assert conn.resp_body =~ "Copy failed"
   end
+
+  test "serves the activity stream auto-follow hook and bounded scroll styles" do
+    js = Endpoint.call(Plug.Test.conn(:get, "/assets/app.js"), Endpoint.init([]))
+    css = Endpoint.call(Plug.Test.conn(:get, "/assets/app.css"), Endpoint.init([]))
+
+    assert js.status == 200
+    assert js.resp_body =~ "ActivityStream"
+    assert js.resp_body =~ "scrollToLatest"
+    assert css.status == 200
+    assert css.resp_body =~ ".activity-stream{max-height:26rem;overflow-y:auto"
+  end
 end

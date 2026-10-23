@@ -88,6 +88,8 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert html =~ "What’s happening"
     assert html =~ "Project files are being updated"
     assert html =~ "The agent reported a file change in the task workspace."
+    assert html =~ ~s(id="activity-stream")
+    assert html =~ ~s(phx-hook="ActivityStream")
     assert html =~ "aria-current=\"step\""
     refute render(view) =~ "private command output"
   end
@@ -227,6 +229,9 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, html} = live(conn, "/app")
     assert html =~ "Start with one project"
     assert html =~ ~s(href="/templates/instructions.md" download="instructions.md")
+    assert html =~ "Project instructions (optional)"
+    assert html =~ "If you skip it, the default template is used."
+    refute has_element?(view, "input[name='instructions'][required]")
     assert html =~ "Create project"
     refute html =~ "PR ready"
 
@@ -251,22 +256,43 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert project.data["instructions"] == "# Project rules\n"
   end
 
-  test "project creation requires a valid instructions file" do
-    scope = owner("required-upload@example.test")
+  test "executor screen provides a copyable command to start a paired connector" do
+    scope = owner("executor-copy@example.test")
+    {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
+    {:ok, %{token: token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+    {:ok, _executor} = DevOrchestrator.Executors.authenticate(token)
+    {:ok, session_token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: session_token})
+
+    {:ok, _view, html} = live(conn, "/app/executors")
+
+    assert html =~ "dev-orchestrator-connector@0.1.0 run --config"
+    assert html =~ "Copy start command"
+    assert html =~ "Pair this computer"
+    assert html =~ "Start the connector"
+    assert html =~ "Authorize a project"
+    assert html =~ "<details"
+  end
+
+  test "project creation uses the default instructions template when no file is uploaded" do
+    scope = owner("optional-upload@example.test")
     {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
     conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
     {:ok, view, _html} = live(conn, "/app")
 
     view
     |> form("#new-project", %{
-      "name" => "No instructions",
-      "repository" => "acme/no-instructions",
+      "name" => "Default instructions",
+      "repository" => "acme/default-instructions",
       "base_branch" => "main"
     })
     |> render_submit()
 
-    assert render(view) =~ "Upload a non-empty instructions.md file"
-    assert [] = Projects.list(scope)
+    [project] = Projects.list(scope)
+    assert_redirect(view, "/app/projects/" <> project.id)
+    assert {:ok, project} = Projects.get_project(scope, project.id)
+    assert project.data["instructions"] =~ "## Project context"
+    assert project.data["instructions"] =~ "## Validation"
   end
 
   test "project rules can replace instructions but invalid uploads preserve the saved version" do
@@ -416,6 +442,63 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert html =~ "GitHub connected"
     refute html =~ ~s(action="/connections/github/start")
     refute html =~ "Install GitHub App"
+  end
+
+  test "project connections show connected status for GitHub, Linear, and Slack" do
+    configure_github_app()
+    scope = owner("all-connections-ui@example.test")
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    DevOrchestrator.Store.exec(
+      "INSERT INTO github_app_installations(organization_id,project_id,repository,installation_id,account) VALUES($1,$2,$3,$4,$5)",
+      [scope.organization_id, project.id, "acme/app", 42, "acme"]
+    )
+
+    for {provider, label, external_id} <- [
+          {"github", "GitHub · acme", "42"},
+          {"linear", "Linear · Team", "team-1"},
+          {"slack", "Slack · Workspace", "workspace-1"}
+        ] do
+      connection_id = DevOrchestrator.Store.id()
+
+      DevOrchestrator.Store.exec(
+        "INSERT INTO connections(id,organization_id,provider,label,secret,external_id) VALUES($1,$2,$3,$4,decode('','hex'),$5)",
+        [connection_id, scope.organization_id, provider, label, external_id]
+      )
+
+      DevOrchestrator.Store.exec("INSERT INTO connection_grants VALUES($1,$2,$3)", [
+        scope.organization_id,
+        project.id,
+        connection_id
+      ])
+    end
+
+    {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
+    {:ok, _view, html} = live(conn, "/app/projects/" <> project.id)
+
+    assert html =~ "GitHub connected"
+    assert html =~ "Linear connected"
+    assert html =~ "Slack connected"
+  end
+
+  test "the connections page labels active provider accounts as connected" do
+    scope = owner("connections-list-status@example.test")
+    connection_id = DevOrchestrator.Store.id()
+
+    DevOrchestrator.Store.exec(
+      "INSERT INTO connections(id,organization_id,provider,label,secret,external_id) VALUES($1,$2,'linear','Linear · Team',decode('','hex'),'team-1')",
+      [connection_id, scope.organization_id]
+    )
+
+    {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
+    {:ok, _view, html} = live(conn, "/app/connections")
+
+    assert html =~ "Linear · Team"
+    assert html =~ "Connected"
   end
 
   test "installation verified for an old repository does not unlock GitHub OAuth" do

@@ -20,6 +20,27 @@ document.addEventListener("click", async (event) => {
   }, 2000);
 });
 
+const ActivityStream = {
+  mounted() {
+    this.followLatest = true;
+    this.handleScroll = () => {
+      const remaining = this.el.scrollHeight - this.el.clientHeight - this.el.scrollTop;
+      this.followLatest = remaining < 48;
+    };
+    this.el.addEventListener("scroll", this.handleScroll, { passive: true });
+    this.scrollToLatest();
+  },
+  updated() {
+    if (this.followLatest) this.scrollToLatest();
+  },
+  destroyed() {
+    this.el.removeEventListener("scroll", this.handleScroll);
+  },
+  scrollToLatest() {
+    this.el.scrollTop = this.el.scrollHeight;
+  },
+};
+
 const csrfToken = document.querySelector("meta[name='csrf-token']")?.content;
-const liveSocket = new LiveSocket("/live", Socket, { params: { _csrf_token: csrfToken } });
+const liveSocket = new LiveSocket("/live", Socket, { params: { _csrf_token: csrfToken }, hooks: { ActivityStream } });
 liveSocket.connect();
