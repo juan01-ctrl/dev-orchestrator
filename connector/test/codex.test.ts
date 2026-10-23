@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CodexSession } from "../src/codex.ts";
+import { CodexSession, CodexBlockedError } from "../src/codex.ts";
 import { spawn } from "node:child_process";
 
 function child(mode="ok") {
@@ -67,3 +67,8 @@ for(const mode of ["failed","malformed","null","exit","commands","no_final","mod
     finally {session.stop();}
   });
 }
+test("a structured blocked turn reaches the worker as a typed terminal blocker",async()=>{
+  const session=new CodexSession(child("model_blocked"));
+  try {await session.initialize();await assert.rejects(session.run("/tmp/task-checkout","Task"),CodexBlockedError);}
+  finally {session.stop();}
+});

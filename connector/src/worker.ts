@@ -155,12 +155,12 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         ? "Continue the existing development task in this isolated checkout from the current workspace state. Do not repeat completed work; inspect the repository and continue from the existing Codex conversation."
         : "Implement this development task end to end in this isolated checkout.",
       "Read and respect the repository's AGENTS.md and project-scoped skills. Do not change global skills or configuration.",
-      "Validate changes and create a Conventional Commit on the existing issue branch. Do not push, create a PR, merge, or deploy: the trusted connector handles publication after your turn.",
       "Do not invent external access or credentials. If essential context is missing, report a real blocker. Network access is restricted: only an exact host in the immutable task policy may be enabled for a specific command; all other hosts remain denied.",
       instructionsPath
         ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
         : "Project instructions:\n"+String(snapshot.instructions??""),
-      "Task: "+String(state.lease.title??""),String(state.lease.prompt??"")
+      "Task: "+String(state.lease.title??""),String(state.lease.prompt??""),
+      "Validate your changes, but do not run git add or git commit: the trusted connector creates the commit after your turn. Do not push, create a PR, merge, or deploy."
     ].join("\n\n");
     let activityWrites = Promise.resolve();
     let contextExpired=false;
@@ -201,6 +201,8 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     await api.post("/executor/renew",state.lease);
     const publicationContext={workspace:workspace.path,repository:String(snapshot.repository??""),baseBranch:String(snapshot.base_branch??""),branch:workspace.branch,baseline:workspace.baseline};
     const publisher=dependencies.publisherFactory?.(publicationContext)??new Publisher(publicationContext);
+    await publisher.commit(/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(state.lease.source_key??"")?state.lease.source_key!:state.lease.id,
+      {author_name:credential.author_name,author_email:credential.author_email},controller.signal);
     const status=await publisher.status(controller.signal);
     if(status.changed) {
       await emitDurably(api,journal,state,"progress",{stage:"publishing"});

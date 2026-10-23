@@ -120,7 +120,7 @@ export class AppServerSession extends EventEmitter {
       const outcome = activeTurn.outcome;
       void this.progressQueue.then(() => {
         if (status === "completed" && outcome === "completed") activeTurn.resolve({ status, outcome });
-        else if (outcome === "blocked") activeTurn.reject(new Error("Essential context is missing; the task is blocked."));
+        else if (status === "completed" && outcome === "blocked") activeTurn.resolve({ status, outcome });
         else activeTurn.reject(new Error("Codex turn did not complete."));
       }, error => activeTurn.reject(error instanceof Error ? error : new Error("Progress delivery failed.")));
     }

@@ -143,8 +143,6 @@ process.stdin.on("data",chunk=>{
 const prompt=message.params.input[0].text;
       const privatePath=prompt.match(/read and follow the file at (.+) before making changes\./)?.[1];
       writeFileSync("README.md","implemented by Codex\\n");
-      execFileSync("git",["add","README.md"]);
-      execFileSync("git",["commit","-m","feat: update project readme"]);
       appendFileSync(observation,JSON.stringify({prompt,content:privatePath?readFileSync(privatePath,"utf8"):null,githubToken:process.env.GITHUB_TOKEN??null,status:execFileSync("git",["status","--porcelain"],{encoding:"utf8"})}));
       respond({id:message.id,result:{}});
       respond({method:"turn/started",params:{threadId:"fake-thread",turn:{id:"turn-1"}}});
@@ -165,7 +163,7 @@ const prompt=message.params.input[0].text;
       {version:2,server:"http://127.0.0.1:4100",token:"test",codexBinary:binary},
       {post:async(path:string,payload:any)=>{if(path==="/executor/github-token"){credentials.push(payload.purpose);return {token:`short-lived-${payload.purpose}-token`,expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};}if(path==="/executor/events"){events.push({kind:payload.event.kind,data:payload.event.data});if(payload.event.kind==="candidate")return {state:"succeeded"};}return {expires_in_ms:90_000};}},
       new Journal(journalRoot),
-      {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,title:"Test task",prompt:"Do nothing",snapshot:{repository:"acme/app",base_branch:"main",instructions}},sequence:0},
+      {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,source_key:"JUA-28",title:"Test task",prompt:"Do nothing",snapshot:{repository:"acme/app",base_branch:"main",instructions}},sequence:0},
       performance.now(),
       new AbortController().signal,
       {dataRoot:root,repositories:new RepositoryWorkspace({remoteURL:()=>remote}),publisherFactory:context=>new Publisher(context,{remoteURL:()=>remote,apiFetch:async(_url,init)=>{
@@ -179,6 +177,8 @@ const prompt=message.params.input[0].text;
     assert.equal(result.content,instructions);
     assert.match(result.prompt,/Project instructions: read and follow the file at /);
     assert.equal(result.githubToken,null);
+    assert.match(result.prompt,/trusted connector creates the commit/);
+    assert.match(result.status,/README\.md/);
     assert.deepEqual(events.filter(event=>event.kind!=="activity").map(event=>event.kind==="progress"?event.data.stage:event.kind),[
       "started","repository_preparing","workspace_ready","agent_started","editing","validating","checks_passed","publishing","pr_verifying","candidate"
     ]);
