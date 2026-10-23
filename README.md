@@ -40,15 +40,14 @@ honestly as `App not configured`; no test integration is displayed as live.
 
 ## Pair a real local executor
 
-In the web app, open **Executors → Create pairing code**. On the customer machine,
-create a dedicated directory for connector credentials, then run:
+In the web app, open **Executors → Create pairing code**. Install/run the local
+connector with the one-time pairing code shown there:
 
 ```bash
-cd connector
-npm ci --ignore-scripts
-mkdir -p "$HOME/.local/share/dev-orchestrator"
-node --experimental-strip-types src/cli.ts pair \
-  --server http://localhost:4100 --code YOUR_ONE_USE_CODE \
+cd "$HOME" && npm i dev-orchestrator-connector
+"$HOME/node_modules/.bin/dev-orchestrator-connector" pair \
+  --server http://localhost:4100 \
+  --code YOUR_ONE_USE_CODE \
   --config "$HOME/.local/share/dev-orchestrator/connector.json"
 ```
 
@@ -58,10 +57,10 @@ The connector downloads the selected repository itself; no local clone or `allow
 command is needed:
 
 ```bash
-node --experimental-strip-types src/cli.ts status \
+"$HOME/node_modules/.bin/dev-orchestrator-connector" status \
   --config "$HOME/.local/share/dev-orchestrator/connector.json"
 
-node --experimental-strip-types src/cli.ts run \
+"$HOME/node_modules/.bin/dev-orchestrator-connector" run \
   --config "$HOME/.local/share/dev-orchestrator/connector.json"
 ```
 
