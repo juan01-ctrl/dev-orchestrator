@@ -54,6 +54,21 @@ test("repository setup reports its failing stage without logging credential mate
   } finally {console.error=original;await rm(root,{recursive:true,force:true});}
 });
 
+test("runtime dependencies and package caches stay out of task commits without editing gitignore",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const prepared=await manager.prepare(f.root,lease("22222222-2222-4222-8222-222222222222"),credential);
+    await manager.excludeRuntimeFiles(prepared.path);
+    await manager.excludeRuntimeFiles(prepared.path);
+    for(const directory of ["node_modules",".dev-orchestrator-cache/npm"]) {
+      await mkdir(join(prepared.path,directory),{recursive:true});
+      await writeFile(join(prepared.path,directory,"cache.txt"),"runtime data");
+    }
+    assert.equal(f.git(prepared.path,["status","--porcelain"]),"");
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
 test("repository setup distinguishes an expired GitHub token from local storage errors",async()=>{
   const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-repository-expired-")));
   const original=console.error;

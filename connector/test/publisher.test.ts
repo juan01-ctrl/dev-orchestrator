@@ -39,6 +39,7 @@ test("trusted connector commits uncommitted task files without agent access to s
   const f=await fixture(false);
   try {
     const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline});
+    assert.deepEqual(await publisher.changedFiles(),["change.txt"]);
     await assert.rejects(publisher.status(),/Uncommitted changes/);
     const result=await publisher.commit("JUA-28",credential);
     assert.equal(result.changed,true);

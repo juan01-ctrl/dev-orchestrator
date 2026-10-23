@@ -246,6 +246,11 @@ defmodule DevOrchestrator.Runs do
                 "execution_policy",
                 DevOrchestrator.ExecutionPolicy.for_task(project, run)
               )
+              |> Map.put("execution_lifecycle", run["lifecycle"])
+              |> Map.put(
+                "execution_deadline_at_ms",
+                FailureBudget.deadline(run, System.system_time(:millisecond))
+              )
 
             leased =
               Store.one(
@@ -455,7 +460,8 @@ defmodule DevOrchestrator.Runs do
 
           %{action: "replay", expires_in_ms: 90_000}
 
-        resumable_thread_id?(journal["thread_id"]) ->
+        resumable_thread_id?(journal["thread_id"]) or
+            get_in(run, ["result", "outcome"]) == "verification_pending" ->
           Store.exec(
             "UPDATE runs SET state='running',lease_expires_at=now()+interval '90 seconds' WHERE id=$1",
             [run["id"]]
@@ -477,7 +483,7 @@ defmodule DevOrchestrator.Runs do
   def retry(scope, id) do
     with true <- Accounts.owner?(scope), {:ok, _} <- get(scope, id) do
       case Store.one(
-             "UPDATE runs SET state='queued',lifecycle=lifecycle+1,generation=generation+1,failures='{}',result=NULL,executor_id=NULL,lease_expires_at=NULL,sequence=0 WHERE id=$1 AND organization_id=$2 AND state IN ('blocked','failed','cancelled') RETURNING id",
+             "UPDATE runs SET state='queued',lifecycle=lifecycle+1,generation=generation+1,failures='{}',result=NULL,snapshot=NULL,executor_id=NULL,lease_expires_at=NULL,sequence=0 WHERE id=$1 AND organization_id=$2 AND state IN ('blocked','failed','cancelled') RETURNING id",
              [id, scope.organization_id]
            ) do
         nil -> {:error, :not_retryable}
@@ -510,11 +516,28 @@ defmodule DevOrchestrator.Runs do
     end
   end
 
-  def expire_leases,
-    do:
+  def expire_leases do
+    Store.transaction(fn ->
+      Store.rows(
+        "SELECT * FROM runs WHERE state IN ('queued','leased','running','waiting_for_executor') AND (snapshot->>'execution_deadline_at_ms')::bigint <= $1 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 100",
+        [System.system_time(:millisecond)]
+      )
+      |> Enum.each(fn run ->
+        result =
+          Map.merge(run["result"] || %{}, %{
+            "summary" =>
+              "Execution stopped after its twenty-minute budget. Existing files and pull requests are preserved.",
+            "category" => "execution_timeout"
+          })
+
+        finish(run, "cancelled", result)
+      end)
+
       Store.exec(
         "UPDATE runs SET state='waiting_for_executor',updated_at=now() WHERE state IN ('running','leased') AND lease_expires_at<=now()"
       )
+    end)
+  end
 
   defp live_executor!(executor) do
     Store.one(
@@ -560,7 +583,10 @@ defmodule DevOrchestrator.Runs do
     if exhausted? do
       finish(run, "cancelled", %{
         "summary" =>
-          "Execution cancelled after three equivalent failures. Files and commits are preserved."
+          "Execution cancelled after three failed attempts. Files and commits are preserved.",
+        "category" => data["category"],
+        "validation" => data["validation"] || [],
+        "detail" => data["summary"]
       })
     else
       Store.exec(
@@ -574,11 +600,17 @@ defmodule DevOrchestrator.Runs do
 
   defp transition(run, "blocked", data),
     do:
-      finish(run, "blocked", %{
-        "summary" =>
-          "Executor blocked: " <>
-            data["category"] <> ". Review local prerequisites and project configuration."
-      })
+      finish(
+        run,
+        "blocked",
+        Map.put(
+          data,
+          "summary",
+          data["summary"] ||
+            "Executor blocked: " <>
+              data["category"] <> ". Review local prerequisites and project configuration."
+        )
+      )
 
   defp transition(run, "candidate", data) do
     case DevOrchestrator.Delivery.Verification.verify(run, data) do
@@ -586,17 +618,34 @@ defmodule DevOrchestrator.Runs do
         finish(run, "succeeded", result)
 
       {:error, reason} ->
-        transition(run, "failure", %{
-          "fingerprint" => Store.digest("verification:" <> to_string(reason))
-        })
+        if DevOrchestrator.Delivery.Verification.retryable?(reason) do
+          result = Map.put(data, "outcome", "verification_pending")
+          Store.exec("UPDATE runs SET state='running',result=$2 WHERE id=$1", [run["id"], result])
+          %{state: "running", verification: "pending"}
+        else
+          finish(
+            run,
+            "blocked",
+            Map.merge(data, %{
+              "category" => "publication_failed",
+              "summary" =>
+                "Pull request verification failed (#{reason}). Review the existing PR and GitHub connection before retrying; implementation was not restarted."
+            })
+          )
+        end
     end
   end
 
-  defp transition(run, "no_changes", _) do
-    finish(run, "succeeded", %{
-      "summary" => "Completed without code changes; no pull request was created.",
-      "outcome" => "completed_no_changes"
-    })
+  defp transition(run, "no_changes", data) do
+    finish(
+      run,
+      "succeeded",
+      Map.merge(data, %{
+        "summary" =>
+          data["summary"] || "Completed without code changes; no pull request was created.",
+        "outcome" => "completed_no_changes"
+      })
+    )
   end
 
   defp transition(run, _, _) do

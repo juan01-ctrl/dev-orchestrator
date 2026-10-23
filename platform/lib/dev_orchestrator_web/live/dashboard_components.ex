@@ -52,7 +52,11 @@ defmodule DevOrchestratorWeb.DashboardComponents do
     ~H"""
     <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true">
       <rect x="7" y="6" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5" />
-      <path d="M13 6V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v9A1.5 1.5 0 0 0 4.5 15H7" stroke="currentColor" stroke-width="1.5" />
+      <path
+        d="M13 6V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v9A1.5 1.5 0 0 0 4.5 15H7"
+        stroke="currentColor"
+        stroke-width="1.5"
+      />
     </svg>
     """
   end
@@ -129,6 +133,9 @@ defmodule DevOrchestratorWeb.DashboardComponents do
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "validating"}}),
     do: "Running a project check"
 
+  def activity_title(%{"kind" => "progress", "data" => %{"stage" => "environment_preparing"}}),
+    do: "Preparing project dependencies"
+
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "checks_passed"}}),
     do: "Project check passed"
 
@@ -175,6 +182,9 @@ defmodule DevOrchestratorWeb.DashboardComponents do
       }),
       do: message
 
+  def activity_description(%{"kind" => kind, "data" => %{"summary" => summary}})
+      when kind in ["failure", "blocked"] and is_binary(summary), do: summary
+
   def activity_description(%{"kind" => kind, "data" => %{"category" => category}})
       when kind in ["failure", "blocked"], do: failure_description(category)
 
@@ -215,6 +225,12 @@ defmodule DevOrchestratorWeb.DashboardComponents do
   def activity_description(%{"kind" => "progress", "data" => %{"stage" => "validating"}}),
     do: "A command matching a common test, lint, build, or type-check task has started."
 
+  def activity_description(%{
+        "kind" => "progress",
+        "data" => %{"stage" => "environment_preparing"}
+      }),
+      do: "Installing dependencies inside the project sandbox. Unchanged environments are reused."
+
   def activity_description(%{"kind" => "progress", "data" => %{"stage" => "checks_passed"}}),
     do: "The latest detected project check exited successfully."
 
@@ -238,6 +254,10 @@ defmodule DevOrchestratorWeb.DashboardComponents do
     do: "The local repository workspace could not be prepared"
 
   defp failure_title("authentication_required"), do: "The local Codex account is not signed in"
+  defp failure_title("environment_setup_failed"), do: "Project dependencies could not be prepared"
+  defp failure_title("validation_failed"), do: "Project validation did not pass"
+  defp failure_title("execution_timeout"), do: "The execution time budget was reached"
+  defp failure_title("network_unavailable"), do: "A required service could not be reached"
   defp failure_title(_), do: "Execution could not be completed"
 
   defp failure_description("github_installation_required"),

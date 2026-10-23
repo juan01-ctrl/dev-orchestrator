@@ -10,6 +10,7 @@ defmodule DevOrchestrator.Connections.HTTP do
       {:ok, %{status: status, body: body}} when status in 200..299 -> {:ok, body}
       {:ok, %{status: status}} when status in [401, 403] -> {:error, :provider_authentication}
       {:ok, %{status: 429}} -> {:error, :provider_rate_limit}
+      {:ok, %{status: status}} when status in 500..599 -> {:error, :provider_unavailable}
       {:ok, _} -> {:error, :provider_rejected}
       _ -> {:error, :provider_unavailable}
     end

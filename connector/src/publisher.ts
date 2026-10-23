@@ -34,6 +34,14 @@ export class Publisher {
     },signal);
   }
 
+  async changedFiles(signal?: AbortSignal): Promise<string[]> {
+    return this.trusted(async git => {
+      const tracked = await git(["diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", this.context.baseline, "--"]);
+      const untracked = await git(["ls-files", "--others", "--exclude-standard", "-z"]);
+      return [...new Set((tracked.output + untracked.output).split("\0").filter(Boolean))];
+    }, signal);
+  }
+
   async commit(identifier:string,author:Pick<GitHubCredential,"author_name"|"author_email">,signal?:AbortSignal):Promise<{changed:boolean;commit:string}> {
     if(!/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(identifier) ||
       !author?.author_name || author.author_name.length>200 || /[\r\n\x00]/.test(author.author_name) ||

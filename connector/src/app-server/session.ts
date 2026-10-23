@@ -4,16 +4,19 @@ import { AppServerClient } from "./client.ts";
 import { publicEventFromNotification, type PublicExecutionEvent } from "./events.ts";
 import { resolveServerRequest, type RequestHandlers } from "./requests.ts";
 import { activityForNotification, type ActivityStage } from "../activity.ts";
+import type { TaskResult } from "../task-result.ts";
+import type { SandboxCommandResult } from "../environment.ts";
 
 type ThreadOptions = { cwd: string; permissions?: string; model?: string; approvalPolicy?: string };
-type SessionOptions = { binary: string; cwd: string; requestHandlers?: RequestHandlers; model?: string };
+type SessionOptions = { binary: string; cwd: string; requestHandlers?: RequestHandlers; model?: string; allowedHosts?: string[] };
+type TurnResult = { status: string; outcome?: string; result?: TaskResult };
 
 export class AppServerSession extends EventEmitter {
   readonly client: AppServerClient;
   readonly child: ChildProcessWithoutNullStreams;
   private initialized = false;
   private threadId?: string;
-  private activeTurn?: { threadId: string; resolve: (value: { status: string; outcome?: string }) => void; reject: (error: Error) => void; outcome?: string };
+  private activeTurn?: { threadId: string; resolve: (value: TurnResult) => void; reject: (error: Error) => void; outcome?: string; result?: TaskResult };
   private progress?: (stage: ActivityStage) => Promise<void>;
   private progressQueue = Promise.resolve();
   private lastStage?: ActivityStage;
@@ -36,9 +39,13 @@ export class AppServerSession extends EventEmitter {
     const allowed = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
     const env = Object.fromEntries(allowed.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
     const args = ["app-server", "--listen", "stdio://",
+      "-c", 'default_permissions="dev-orchestrator"',
       "-c", 'permissions.dev-orchestrator.extends=":workspace"',
       "-c", 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="write",".agents"="write",".codex"="read"}}',
       "-c", "permissions.dev-orchestrator.network.enabled=false"];
+    const hosts = [...new Set(options.allowedHosts ?? [])];
+    if (hosts.some(host => !/^(?=.{1,253}$)[a-z0-9]+(?:[.-][a-z0-9]+)*$/i.test(host))) throw new Error("Invalid execution network allowlist.");
+    if (hosts.length) args.push("-c", "features.network_proxy=true", "-c", "permissions.dev-orchestrator.network.enabled=true", "-c", `permissions.dev-orchestrator.network.domains={${hosts.map(host => `${JSON.stringify(host)}="allow"`).join(",")}}`);
     const session = new AppServerSession(spawn(options.binary, args, { cwd: options.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] }), options.requestHandlers);
     session.defaultModel = options.model;
     return session;
@@ -54,6 +61,20 @@ export class AppServerSession extends EventEmitter {
   }
 
   configureRequestHandlers(handlers: RequestHandlers): void { this.handlers = handlers; }
+
+  async exec(command: string[], cwd: string, signal: AbortSignal, timeoutMs = 120_000): Promise<SandboxCommandResult> {
+    if (signal.aborted) throw new Error("Task stopped before environment execution.");
+    const stop = () => this.close();
+    signal.addEventListener("abort", stop, { once: true });
+    try {
+      const result = await this.client.request("command/exec", {
+        command, cwd, permissionProfile: "dev-orchestrator", timeoutMs, outputBytesCap: 8_192,
+        env: { npm_config_cache: cwd + "/.dev-orchestrator-cache/npm", npm_config_userconfig: "/dev/null", CI: "true" }
+      }, timeoutMs + 5_000);
+      if (!Number.isInteger(result?.exitCode)) throw new Error("Codex returned no environment command status.");
+      return { exitCode: result.exitCode, stdout: String(result.stdout ?? "").slice(-8_192), stderr: String(result.stderr ?? "").slice(-8_192) };
+    } finally { signal.removeEventListener("abort", stop); }
+  }
 
   async authenticated(): Promise<boolean> {
     const result = await this.client.request("account/read", { refreshToken: false });
@@ -84,13 +105,13 @@ export class AppServerSession extends EventEmitter {
     return threadId;
   }
 
-  runTurn(prompt: string, options: { cwd?: string; outputSchema?: unknown; effort?: string; onProgress?: (stage: ActivityStage) => Promise<void> } = {}): Promise<{ status: string; outcome?: string }> {
+  runTurn(prompt: string, options: { cwd?: string; outputSchema?: unknown; effort?: string; onProgress?: (stage: ActivityStage) => Promise<void> } = {}): Promise<TurnResult> {
     if (!this.threadId) return Promise.reject(new Error("Start or resume a Codex thread before running a turn."));
     if (this.activeTurn) return Promise.reject(new Error("A Codex turn is already active in this session."));
     this.progress = options.onProgress;
     this.lastStage = undefined;
     const threadId = this.threadId;
-    const completed = new Promise<{ status: string; outcome?: string }>((resolve, reject) => { this.activeTurn = { threadId, resolve, reject }; });
+    const completed = new Promise<TurnResult>((resolve, reject) => { this.activeTurn = { threadId, resolve, reject }; });
     void this.client.request("turn/start", { threadId, ...(options.cwd ? { cwd: options.cwd } : {}), approvalPolicy: "never", permissions: "dev-orchestrator", ...(options.effort ? { effort: options.effort } : {}), input: [{ type: "text", text: prompt }], ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}) }).catch(error => this.activeTurn?.reject(error));
     return completed.finally(() => { this.activeTurn = undefined; this.progress = undefined; });
   }
@@ -111,7 +132,7 @@ export class AppServerSession extends EventEmitter {
       void this.progressQueue.catch(error => this.emit("warning", error));
     }
     if (message.method === "item/completed" && params.item?.type === "agentMessage") {
-      try { const result = JSON.parse(params.item.text); if (["completed", "blocked"].includes(result?.outcome) && this.activeTurn) this.activeTurn.outcome = result.outcome; }
+      try { const result = JSON.parse(params.item.text); if (["completed", "blocked"].includes(result?.outcome) && this.activeTurn) { this.activeTurn.outcome = result.outcome; if (typeof result.summary === "string" || result.blocker) this.activeTurn.result = result; } }
       catch { /* structured outcome may arrive in a later assistant message */ }
     }
     const activeTurn = this.activeTurn;
@@ -119,8 +140,7 @@ export class AppServerSession extends EventEmitter {
       const status = params.turn?.status;
       const outcome = activeTurn.outcome;
       void this.progressQueue.then(() => {
-        if (status === "completed" && outcome === "completed") activeTurn.resolve({ status, outcome });
-        else if (status === "completed" && outcome === "blocked") activeTurn.resolve({ status, outcome });
+        if (status === "completed" && ["completed", "blocked"].includes(outcome ?? "")) activeTurn.resolve({ status, outcome, ...(activeTurn.result ? { result: activeTurn.result } : {}) });
         else activeTurn.reject(new Error("Codex turn did not complete."));
       }, error => activeTurn.reject(error instanceof Error ? error : new Error("Progress delivery failed.")));
     }

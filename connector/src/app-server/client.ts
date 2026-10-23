@@ -31,7 +31,7 @@ export class AppServerClient extends EventEmitter {
     child.on("close", code => this.fail(new Error(code === 0 ? "Codex app-server stopped." : "Codex app-server exited unexpectedly.")));
   }
 
-  request(method: string, params: unknown = {}): Promise<any> {
+  request(method: string, params: unknown = {}, timeoutMs = this.requestTimeoutMs): Promise<any> {
     if (this.closed) return Promise.reject(this.failure ?? new Error("Codex app-server is closed."));
     return new Promise((resolve, reject) => {
       const id = ++this.nextId;
@@ -40,7 +40,7 @@ export class AppServerClient extends EventEmitter {
         const error = new Error("Codex app-server request timed out.");
         reject(error);
         this.close(error);
-      }, this.requestTimeoutMs);
+      }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       if (!this.write({ id, method, params })) {
         clearTimeout(timer);

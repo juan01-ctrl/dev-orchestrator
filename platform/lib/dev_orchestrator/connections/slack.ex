@@ -99,6 +99,24 @@ defmodule DevOrchestrator.Connections.Slack do
 
     blocks = [%{type: "section", text: %{type: "plain_text", text: text}}]
 
+    checks =
+      Enum.map_join(result["validation"] || [], "\n", fn check ->
+        check["status"] <> ": " <> check["command"]
+      end)
+
+    detail =
+      Enum.filter(
+        [if(checks != "", do: "Validation\n" <> checks), result["question"]],
+        &(is_binary(&1) and &1 != "")
+      )
+      |> Enum.join("\n\n")
+      |> String.slice(0, 2_900)
+
+    blocks =
+      if detail != "",
+        do: blocks ++ [%{type: "section", text: %{type: "plain_text", text: detail}}],
+        else: blocks
+
     blocks =
       if result["pr_url"],
         do:

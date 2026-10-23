@@ -2,6 +2,8 @@ defmodule DevOrchestrator.Delivery.Verification do
   alias DevOrchestrator.Connections
   alias DevOrchestrator.Connections.GitHub
 
+  def retryable?(reason), do: reason in [:provider_unavailable, :provider_rate_limit]
+
   def verify(run, result) do
     repository = run["snapshot"]["repository"]
 
@@ -38,7 +40,9 @@ defmodule DevOrchestrator.Delivery.Verification do
         {:ok,
          Map.merge(result, %{
            "outcome" => "pr_ready",
-           "summary" => "Changes are available in a verified open pull request for review."
+           "summary" =>
+             result["summary"] ||
+               "Changes are available in a verified open pull request for review."
          })},
       else: {:error, :unverified_pr}
   end

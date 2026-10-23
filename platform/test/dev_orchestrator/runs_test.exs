@@ -36,6 +36,87 @@ defmodule DevOrchestrator.RunsTest do
     assert lease["snapshot"]["base_branch"] == "main"
   end
 
+  test "automatic retries share one deadline and expire with a single final report", ctx do
+    {:ok, run} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Budget", "prompt" => "Run"})
+    {:ok, first} = Runs.claim(ctx.executor)
+    deadline = first["snapshot"]["execution_deadline_at_ms"]
+    assert is_integer(deadline)
+
+    assert {:ok, %{state: "queued"}} =
+             Runs.append_event(ctx.executor, first, %{
+               "sequence" => 1,
+               "kind" => "failure",
+               "data" => %{"category" => "execution_failed"}
+             })
+
+    {:ok, second} = Runs.claim(ctx.executor)
+    assert second["snapshot"]["execution_deadline_at_ms"] == deadline
+
+    expired =
+      Map.put(
+        second["snapshot"],
+        "execution_deadline_at_ms",
+        System.system_time(:millisecond) - 1
+      )
+
+    Store.exec("UPDATE runs SET snapshot=$2 WHERE id=$1", [run["id"], expired])
+    Runs.expire_leases()
+    Runs.expire_leases()
+
+    assert {:ok, %{"state" => "cancelled", "result" => %{"category" => "execution_timeout"}}} =
+             Runs.get(ctx.scope, run["id"])
+
+    assert length(DevOrchestrator.Delivery.Outbox.list(ctx.scope, run["id"])) == 2
+    assert :ok = Runs.retry(ctx.scope, run["id"])
+    {:ok, restarted} = Runs.claim(ctx.executor)
+    assert restarted["lifecycle"] == second["lifecycle"] + 1
+    assert restarted["snapshot"]["execution_deadline_at_ms"] > System.system_time(:millisecond)
+  end
+
+  test "structured blocker details reach the final result and reports", ctx do
+    {:ok, run} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Check", "prompt" => "Run"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "blocked"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "blocked",
+               "data" => %{
+                 "category" => "environment_setup_failed",
+                 "summary" => "npm ci failed: registry unavailable",
+                 "validation" => [%{"command" => "npm ci", "status" => "failed"}]
+               }
+             })
+
+    assert {:ok, %{"result" => result}} = Runs.get(ctx.scope, run["id"])
+    assert result["summary"] == "npm ci failed: registry unavailable"
+    assert result["validation"] == [%{"command" => "npm ci", "status" => "failed"}]
+  end
+
+  test "verification cannot queue implementation again when GitHub is not connected", ctx do
+    {:ok, run} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Verify", "prompt" => "Run"})
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    candidate = %{
+      "repository" => "acme/app",
+      "base_branch" => "main",
+      "branch" => "task/" <> run["id"],
+      "commit" => String.duplicate("a", 40),
+      "pr_url" => "https://github.com/acme/app/pull/1"
+    }
+
+    assert {:ok, %{state: "blocked"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "candidate",
+               "data" => candidate
+             })
+
+    assert {:ok, %{"result" => result}} = Runs.get(ctx.scope, run["id"])
+    assert result["pr_url"] == candidate["pr_url"]
+    assert {:ok, nil} = Runs.claim(ctx.executor)
+  end
+
   test "active leases keep their instructions snapshot while later runs get updates", ctx do
     {:ok, _} =
       Projects.update_project(ctx.scope, ctx.project.id, %{

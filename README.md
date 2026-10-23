@@ -72,6 +72,36 @@ author setup is required. One connector runs one task at a time; multiple
 connectors allow parallel work subject to per-project limits. Its dedicated Codex
 subprocess does not attach to desktop chats.
 
+## Project preparation and recovery
+
+The executor detects Node package managers and lockfiles, prepares dependencies
+only when code needs validation, and reuses unchanged setup inside the same task.
+Text-only tasks skip installation and checks unless the repository configures them.
+Existing `check`, `typecheck`, `lint` and `test` scripts are run; `build` is the fallback.
+Do not use watch-mode scripts for these checks. Each command is limited to two minutes.
+
+Other stacks or repositories needing explicit commands can add an optional
+`.dev-orchestrator.json` at the repository root. Commands are argv arrays, not shell strings:
+
+```json
+{
+  "setup": [["mix", "deps.get"]],
+  "validate": [["mix", "test"]]
+}
+```
+
+Repository commands use the same task sandbox and exact-host network policy as
+Codex; provider credentials are never passed to them. Required package managers
+must already be installed on the executor. This requires Codex CLI 0.163.0 or newer
+with the experimental app-server command API.
+
+Failed checks return to the same conversation for at most three implementation/
+repair attempts. Network commands retry without a model turn. Publication and PR
+verification resume from saved checkpoints, not from the original task prompt.
+A persistent twenty-minute budget includes reconnects and retries. Final reports
+include the actual summary, checks and any genuine context question; command output
+stays local. A new owner-triggered retry starts a new budget.
+
 ## Verification
 
 ```bash
@@ -93,11 +123,11 @@ configured provider apps; automated tests never use your real accounts.
 
 ## Boundaries
 
-- Three equivalent task failures stop automatic work and enqueue one final report.
+- Three failed task attempts stop automatic work and enqueue one final report.
 - Disconnection preserves files and journals. Expired active work waits for
   reconciliation instead of being assigned again blindly.
 - No force push, automatic merge, deployment, billing, hosted executors or Claude
-  adapter is included. The agent's evaluation sandbox has network disabled.
+  adapter is included. Sandbox networking is restricted to server-approved exact hosts.
 - A private local-login prototype is not a promise of commercial subscription
   eligibility; commercial provider authorization is a separate requirement.
 - Repository source can reach the model provider. Only bounded, sanitized event

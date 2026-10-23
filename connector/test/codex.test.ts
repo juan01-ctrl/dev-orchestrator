@@ -69,6 +69,6 @@ for(const mode of ["failed","malformed","null","exit","commands","no_final","mod
 }
 test("a structured blocked turn reaches the worker as a typed terminal blocker",async()=>{
   const session=new CodexSession(child("model_blocked"));
-  try {await session.initialize();await assert.rejects(session.run("/tmp/task-checkout","Task"),CodexBlockedError);}
+  try {await session.initialize();await assert.rejects(session.run("/tmp/task-checkout","Task"),error=>error instanceof CodexBlockedError && error.result.blocker?.category === "execution_failed");}
   finally {session.stop();}
 });

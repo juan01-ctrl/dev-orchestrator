@@ -4,12 +4,20 @@ import { AppServerSession } from "./app-server/session.ts";
 import { authorizeCommand, authorizeFileChange } from "./app-server/capabilities.ts";
 import type { ActivityStage } from "./activity.ts";
 import type { PublicExecutionEvent } from "./app-server/events.ts";
+import { normalizeTaskResult, taskResultSchema, type TaskResult } from "./task-result.ts";
 
 export class RepeatedFailureError extends Error {
   readonly fingerprint: string;
   constructor(fingerprint: string) { super("Codex repeated the same failed command three times."); this.fingerprint = fingerprint; }
 }
-export class CodexBlockedError extends Error {}
+export class CodexBlockedError extends Error {
+  readonly result: TaskResult;
+  constructor(result: TaskResult | string) {
+    const normalized = normalizeTaskResult(typeof result === "string" ? { outcome: "blocked", summary: result } : result);
+    super(normalized.blocker?.message ?? normalized.summary);
+    this.result = normalized;
+  }
+}
 export class CodexPolicyError extends Error {}
 
 export class CodexSession {
@@ -34,15 +42,15 @@ export class CodexSession {
     this.session.on("notification", message => this.inspectCommand(message));
   }
 
-  static start(binary: string, workspace: string): CodexSession {
-    const session = AppServerSession.open({ binary, cwd: workspace });
+  static start(binary: string, workspace: string, allowedHosts?: string[]): CodexSession {
+    const session = AppServerSession.open({ binary, cwd: workspace, allowedHosts });
     return new CodexSession(session.child, workspace, session);
   }
 
   initialize(): Promise<void> { return this.session.initialize(); }
   authenticated(): Promise<boolean> { return this.session.authenticated(); }
 
-  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; onThreadStarted?: (threadId: string) => Promise<void>; onUserInput?: (params: any) => Promise<unknown> } = {}): Promise<void> {
+  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; onThreadStarted?: (threadId: string) => Promise<void>; onUserInput?: (params: any) => Promise<unknown> } = {}): Promise<TaskResult> {
     if (signal?.aborted) throw new Error("Task stopped before lease expiration.");
     if (policy && policy.valid === false) throw new CodexPolicyError("Configured model is not supported by this executor deployment.");
     const selectedModel = typeof policy?.model === "string" ? policy.model : model;
@@ -91,7 +99,7 @@ export class CodexSession {
       const completed = this.session.runTurn(prompt, {
         cwd: workspace,
         effort: typeof policy?.effort === "string" ? policy.effort : undefined,
-        outputSchema: { type: "object", properties: { outcome: { type: "string", enum: ["completed", "blocked"] } }, required: ["outcome"], additionalProperties: false },
+        outputSchema: taskResultSchema,
         onProgress
       });
       const repeated = new Promise<never>((_, reject) => {
@@ -102,7 +110,9 @@ export class CodexSession {
       const result = await Promise.race([completed, repeated]);
       await flushDelta();
       await eventQueue;
-      if (result.outcome === "blocked") throw new CodexBlockedError("Essential context is missing; the task is blocked.");
+      const task = normalizeTaskResult(result.result ?? { outcome: result.outcome });
+      if (task.outcome === "blocked") throw new CodexBlockedError(task);
+      return task;
     } finally {
       if (deltaTimer) clearTimeout(deltaTimer);
       this.session.off("event", onPublicEvent);

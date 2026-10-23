@@ -49,6 +49,20 @@ event before sending it and keep it until acknowledged. Candidate data contains
 repository, branch, base branch, commit and PR URL. Only the server's independent
 GitHub verification can finalize it as successful PR delivery.
 
+Optional `summary`, `validation` (`command`, `status`: `passed`, `failed`, `not_run`)
+and `question` fields are bounded and sanitized on the server. They survive final
+results and Slack reports; raw command diagnostics do not travel in events. A
+blocked event carries a specific category; `missing_context` requires an actual
+question, not a missing dependency or failed check. Legacy minimal events remain valid.
+
+The snapshot's `execution_deadline_at_ms` is shared across automatic retries in
+one lifecycle. Manual retry starts a fresh lifecycle and budget. The journal keeps
+the current phase, implementation/publication/verification attempt counts, results,
+environment fingerprint and deadline. `environment_preparing` is a progress stage.
+For a transient GitHub verification failure, candidate acknowledgement is
+`{"state":"running","verification":"pending"}`. The connector retries that same
+candidate up to three times. A permanent mismatch blocks without restarting coding.
+
 Renew every 20 seconds. Compute the deadline from request start, not receipt time;
 stop the local process at least five seconds before the last acknowledged lease
 deadline. A failed renewal never extends that deadline. Before publication, perform

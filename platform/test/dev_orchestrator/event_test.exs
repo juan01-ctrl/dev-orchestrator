@@ -2,6 +2,36 @@ defmodule DevOrchestrator.EventTest do
   use ExUnit.Case, async: true
   alias DevOrchestrator.Runs.Event
 
+  test "structured blockers retain actionable bounded details without secrets" do
+    {:ok, data} =
+      Event.sanitize(%{}, "blocked", %{
+        "category" => "environment_setup_failed",
+        "summary" => "npm ci failed: ghp_123456789012345678901234567890",
+        "validation" => [
+          %{"command" => "npm run check", "status" => "failed", "output" => "private"}
+        ],
+        "question" => "",
+        "pr_url" => "https://evil.example/pull/1"
+      })
+
+    assert data["category"] == "environment_setup_failed"
+    assert data["summary"] =~ "npm ci failed"
+    refute data["summary"] =~ "ghp_"
+    assert data["validation"] == [%{"command" => "npm run check", "status" => "failed"}]
+    refute Map.has_key?(data, "pr_url")
+
+    assert {:ok, %{"stage" => "environment_preparing"}} =
+             Event.sanitize(%{}, "progress", %{"stage" => "environment_preparing"})
+  end
+
+  test "no-change reports preserve the actual summary and checks" do
+    assert {:ok, %{"summary" => "Already implemented", "validation" => []}} =
+             Event.sanitize(%{}, "no_changes", %{
+               "summary" => "Already implemented",
+               "validation" => []
+             })
+  end
+
   test "free-form fingerprints and logs never enter persistent events" do
     {:ok, safe} =
       Event.sanitize(%{}, "failure", %{

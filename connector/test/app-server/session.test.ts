@@ -20,6 +20,10 @@ function child(outcome: "completed" | "blocked" = "completed") {
         result={thread:{id:'thread-session-test'}};
       }
       if(message.method==='thread/resume')result={thread:{id:message.params.threadId}};
+      if(message.method==='command/exec') {
+        if(message.params.sandboxPolicy || message.params.permissionProfile!=='dev-orchestrator' || message.params.timeoutMs>120000)process.exit(13);
+        result={exitCode:message.params.command[0]==='false'?1:0,stdout:'bounded output',stderr:''};
+      }
       process.stdout.write(JSON.stringify({id:message.id,result})+'\\n');
       if(message.method==='turn/start') {
         if(message.params.effort && message.params.effort!=='low')process.exit(10);
@@ -46,6 +50,14 @@ test("session initializes once, discovers profiles, starts and resumes a persist
     assert.equal(await session.resumeThread(threadId, { cwd: "/tmp/task", permissions: "dev-orchestrator" }), threadId);
     assert.equal((await session.runTurn("Second turn")).status, "completed");
     assert.equal(events.filter((event: any) => event.kind === "message_delta").length, 2);
+  } finally { session.close(); }
+});
+
+test("environment commands use the configured sandbox without a model turn and retain nonzero status", async () => {
+  const session = new AppServerSession(child());
+  try {
+    await session.initialize();
+    assert.deepEqual(await session.exec(["false"], "/tmp/task", new AbortController().signal), { exitCode: 1, stdout: "bounded output", stderr: "" });
   } finally { session.close(); }
 });
 

@@ -249,6 +249,22 @@ export class RepositoryWorkspace {
     await writeFile(terminalPath,JSON.stringify({outcome,recorded_at:Date.now()}),{mode:0o600,flag:"wx"});
   }
 
+  async excludeRuntimeFiles(workspace: string): Promise<void> {
+    const cache = await workspaceCache(workspace);
+    await readMarker(workspace, cache);
+    const release = await acquireLock(cache + ".lock");
+    try {
+      const directory = join(cache, "info");
+      await ensureDirectory(directory);
+      const path = join(directory, "exclude");
+      const info = await lstat(path).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; });
+      if (info && (!info.isFile() || info.isSymbolicLink() || info.size > 1_048_576)) throw new Error("Unsafe runtime exclude metadata.");
+      const current = info ? await readFile(path, "utf8") : "";
+      const rules = ["/node_modules/", "/.dev-orchestrator-cache/"].filter(rule => !current.split(/\r?\n/).includes(rule));
+      if (rules.length) await writeFile(path, current + "\n" + rules.join("\n") + "\n", { mode: 0o600 });
+    } finally { await release(); }
+  }
+
   async cleanupExpired(root:string,protectedWorkspace?:string,now=Date.now()):Promise<number> {
     const canonicalRoot=await ensureDirectory(root);
     const workspacesRoot=join(canonicalRoot,"workspaces");

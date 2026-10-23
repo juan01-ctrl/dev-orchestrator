@@ -56,6 +56,28 @@ defmodule DevOrchestrator.ProviderTest do
     assert query["scope"] == "chat:write,channels:read,groups:read"
   end
 
+  test "Slack final reports include the actual summary, failed check and real question" do
+    message =
+      Slack.report(
+        %{
+          "title" => "Task",
+          "state" => "blocked",
+          "result" => %{
+            "summary" => "Dependency installation failed",
+            "question" => "Which private registry should this project use?",
+            "validation" => [%{"command" => "npm ci", "status" => "failed"}],
+            "pr_url" => "https://github.com/acme/app/pull/1"
+          }
+        },
+        "C123"
+      )
+
+    assert message.text =~ "Dependency installation failed"
+    assert Enum.any?(message.blocks, &(&1.text.text =~ "failed: npm ci"))
+    assert Enum.any?(message.blocks, &(&1.text.text =~ "Which private registry"))
+    assert Enum.any?(message.blocks, &(&1.text.text =~ "Review pull request"))
+  end
+
   test "Slack clarification delivery links to the run without exposing provider internals" do
     payload = %{
       "title" => "Choose a framework",
@@ -136,6 +158,22 @@ defmodule DevOrchestrator.ProviderTest do
     end)
 
     assert :rejected = Slack.deliver("test-only-token", %{})
+  end
+
+  test "provider 5xx errors are transient but rejected requests are not" do
+    for status <- [500, 502, 503] do
+      Application.put_env(:dev_orchestrator, :provider_transport, fn _ ->
+        {:ok, %{status: status}}
+      end)
+
+      assert {:error, :provider_unavailable} =
+               DevOrchestrator.Connections.HTTP.request(:get, "https://api.github.com/test")
+    end
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn _ -> {:ok, %{status: 422}} end)
+
+    assert {:error, :provider_rejected} =
+             DevOrchestrator.Connections.HTTP.request(:get, "https://api.github.com/test")
   end
 
   test "Linear token refresh sends the explicit grant and preserves expiry" do

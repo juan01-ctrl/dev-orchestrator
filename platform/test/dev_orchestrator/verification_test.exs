@@ -2,6 +2,13 @@ defmodule DevOrchestrator.VerificationTest do
   use ExUnit.Case, async: true
   alias DevOrchestrator.Delivery.Verification
 
+  test "only transient provider failures retry verification without restarting implementation" do
+    assert Verification.retryable?(:provider_unavailable)
+    assert Verification.retryable?(:provider_rate_limit)
+    refute Verification.retryable?(:unverified_pr)
+    refute Verification.retryable?(:provider_authentication)
+  end
+
   test "a verified open PR is accepted regardless of a review state's name" do
     run = %{
       "id" => "run-13",
@@ -13,7 +20,9 @@ defmodule DevOrchestrator.VerificationTest do
       "branch" => "task/run-13",
       "base_branch" => "main",
       "commit" => String.duplicate("a", 40),
-      "pr_url" => "https://github.com/acme/app/pull/13"
+      "pr_url" => "https://github.com/acme/app/pull/13",
+      "summary" => "Added the signup popup",
+      "validation" => [%{"command" => "npm run check", "status" => "passed"}]
     }
 
     pr = %{
@@ -28,6 +37,8 @@ defmodule DevOrchestrator.VerificationTest do
 
     assert {:ok, verified} = Verification.validate_pr(run, result, pr)
     assert verified["pr_url"] == "https://github.com/acme/app/pull/13"
+    assert verified["summary"] == result["summary"]
+    assert verified["validation"] == result["validation"]
 
     assert {:error, :unverified_pr} =
              Verification.validate_pr(
