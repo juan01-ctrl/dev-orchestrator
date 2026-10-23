@@ -11,6 +11,8 @@ defmodule DevOrchestrator.Accounts do
     if byte_size(email) <= 254 and Regex.match?(~r/\A[^\s@]+@[^\s@]+\.[^\s@]+\z/, email) and
          String.length(password) >= 12 and byte_size(password) <= 1024 and is_binary(name) and
          byte_size(name) in 1..100 do
+      password_hash = Pbkdf2.hash_pwd_salt(password)
+
       result =
         Store.transaction(fn ->
           if Store.one("SELECT id FROM users WHERE email=$1", [email]),
@@ -22,7 +24,7 @@ defmodule DevOrchestrator.Accounts do
           Store.exec("INSERT INTO users(id,email,password_hash) VALUES($1,$2,$3)", [
             user_id,
             email,
-            Pbkdf2.hash_pwd_salt(password)
+            password_hash
           ])
 
           Store.exec("INSERT INTO organizations(id,name) VALUES($1,$2)", [organization_id, name])

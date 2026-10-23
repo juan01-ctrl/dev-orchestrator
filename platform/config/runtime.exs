@@ -16,6 +16,7 @@ if config_env() == :prod do
 
   config :dev_orchestrator, DevOrchestrator.Repo,
     url: System.fetch_env!("DATABASE_URL"),
+    ssl: [cacerts: :public_key.cacerts_get()],
     pool_size: 10
 
   config :dev_orchestrator, DevOrchestratorWeb.Endpoint,
