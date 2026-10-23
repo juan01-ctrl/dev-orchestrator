@@ -6,7 +6,7 @@ for app <- ~w(jason req),
     do: Code.append_path(path)
 
 for file <-
-      ~w(policy.ex runtime_config.ex execution_policy.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex runs/failure_budget.ex runs/event.ex runs/lifecycle.ex delivery/retry.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex) do
+      ~w(policy.ex runtime_config.ex execution_policy.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex connections/linear.ex runs/failure_budget.ex runs/event.ex runs/lifecycle.ex delivery/retry.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex) do
   Code.require_file("lib/dev_orchestrator/" <> file)
 end
 

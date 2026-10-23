@@ -11,6 +11,18 @@ type ThreadOptions = { cwd: string; permissions?: string; model?: string; approv
 type SessionOptions = { binary: string; cwd: string; requestHandlers?: RequestHandlers; model?: string; allowedHosts?: string[] };
 type TurnResult = { status: string; outcome?: string; result?: TaskResult };
 
+export function buildAppServerArgs(allowedHosts: string[] = []): string[] {
+  const args = ["app-server", "--listen", "stdio://",
+    "-c", 'default_permissions="dev-orchestrator"',
+    "-c", 'permissions.dev-orchestrator.extends=":workspace"',
+    "-c", 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="read",".agents"="write",".codex"="read"}}',
+    "-c", "permissions.dev-orchestrator.network.enabled=false"];
+  const hosts = [...new Set(allowedHosts)];
+  if (hosts.some(host => !/^(?=.{1,253}$)[a-z0-9]+(?:[.-][a-z0-9]+)*$/i.test(host))) throw new Error("Invalid execution network allowlist.");
+  if (hosts.length) args.push("-c", "features.network_proxy=true", "-c", "permissions.dev-orchestrator.network.enabled=true", "-c", `permissions.dev-orchestrator.network.domains={${hosts.map(host => `${JSON.stringify(host)}="allow"`).join(",")}}`);
+  return args;
+}
+
 export class AppServerSession extends EventEmitter {
   readonly client: AppServerClient;
   readonly child: ChildProcessWithoutNullStreams;
@@ -38,14 +50,8 @@ export class AppServerSession extends EventEmitter {
   static open(options: SessionOptions): AppServerSession {
     const allowed = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
     const env = Object.fromEntries(allowed.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
-    const args = ["app-server", "--listen", "stdio://",
-      "-c", 'default_permissions="dev-orchestrator"',
-      "-c", 'permissions.dev-orchestrator.extends=":workspace"',
-      "-c", 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="write",".agents"="write",".codex"="read"}}',
-      "-c", "permissions.dev-orchestrator.network.enabled=false"];
-    const hosts = [...new Set(options.allowedHosts ?? [])];
-    if (hosts.some(host => !/^(?=.{1,253}$)[a-z0-9]+(?:[.-][a-z0-9]+)*$/i.test(host))) throw new Error("Invalid execution network allowlist.");
-    if (hosts.length) args.push("-c", "features.network_proxy=true", "-c", "permissions.dev-orchestrator.network.enabled=true", "-c", `permissions.dev-orchestrator.network.domains={${hosts.map(host => `${JSON.stringify(host)}="allow"`).join(",")}}`);
+    env.GIT_OPTIONAL_LOCKS = "0";
+    const args = buildAppServerArgs(options.allowedHosts);
     const session = new AppServerSession(spawn(options.binary, args, { cwd: options.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] }), options.requestHandlers);
     session.defaultModel = options.model;
     return session;
@@ -69,7 +75,7 @@ export class AppServerSession extends EventEmitter {
     try {
       const result = await this.client.request("command/exec", {
         command, cwd, permissionProfile: "dev-orchestrator", timeoutMs, outputBytesCap: 8_192,
-        env: { npm_config_cache: cwd + "/.dev-orchestrator-cache/npm", npm_config_userconfig: "/dev/null", CI: "true" }
+        env: { npm_config_cache: cwd + "/.dev-orchestrator-cache/npm", npm_config_userconfig: "/dev/null", GIT_OPTIONAL_LOCKS: "0", CI: "true" }
       }, timeoutMs + 5_000);
       if (!Number.isInteger(result?.exitCode)) throw new Error("Codex returned no environment command status.");
       return { exitCode: result.exitCode, stdout: String(result.stdout ?? "").slice(-8_192), stderr: String(result.stderr ?? "").slice(-8_192) };

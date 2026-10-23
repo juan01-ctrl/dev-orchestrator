@@ -97,6 +97,41 @@ test("reuses the matching task lifecycle and rejects repository, branch, and mar
   } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
+test("recovers a clean registered worktree when the process stopped before writing its marker",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const expected=lease("22222222-2222-4222-8222-222222222222");
+    const prepared=await manager.prepare(f.root,expected,credential);
+    const pointer=(await readFile(join(prepared.path,".git"),"utf8")).trim().replace(/^gitdir: /,"");
+    const gitdir=resolve(prepared.path,pointer);
+    await rm(join(gitdir,"orchestrator.json"));
+
+    const recovered=await manager.prepare(f.root,{...expected,generation:2},credential);
+
+    assert.deepEqual(recovered,prepared);
+    assert.equal(await readFile(join(gitdir,"orchestrator.json"),"utf8").then(JSON.parse).then(marker=>marker.run),expected.id);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("does not overwrite an unmarked worktree that contains task changes",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const expected=lease("22222222-2222-4222-8222-222222222222");
+    const prepared=await manager.prepare(f.root,expected,credential);
+    const pointer=(await readFile(join(prepared.path,".git"),"utf8")).trim().replace(/^gitdir: /,"");
+    const gitdir=resolve(prepared.path,pointer);
+    await rm(join(gitdir,"orchestrator.json"));
+    await writeFile(join(prepared.path,"preserve.txt"),"existing task work");
+
+    await assert.rejects(manager.prepare(f.root,{...expected,generation:2},credential),/manual recovery/);
+
+    assert.equal(await readFile(join(prepared.path,"preserve.txt"),"utf8"),"existing task work");
+    await assert.rejects(readFile(join(gitdir,"orchestrator.json")));
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
 test("keeps tokens out of cache remotes and stores instructions in private worktree metadata",async()=>{
   const f=await fixture();
   try {

@@ -65,6 +65,7 @@ async function worktreeGitDirectory(workspace:string,cache:string):Promise<strin
   if(!gitdir.startsWith(worktrees+sep) || relative(worktrees,gitdir).split(sep).length!==1)throw new Error("Task worktree metadata escaped its managed repository.");
   const gitInfo=await lstat(gitdir);
   if(!gitInfo.isDirectory() || gitInfo.isSymbolicLink())throw new Error("Task worktree metadata is invalid.");
+  if(await realpath(join(gitdir,"..",".."))!==await realpath(cache))throw new Error("Task worktree points at a different managed repository.");
   return gitdir;
 }
 
@@ -136,7 +137,15 @@ export class RepositoryWorkspace {
         const existingWorkspace=await lstat(workspace).catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;throw error;});
         if(existingWorkspace) {
           if(!existingWorkspace.isDirectory() || existingWorkspace.isSymbolicLink() || await realpath(workspace)!==workspace)throw new Error("Existing task worktree is unsafe.");
-          const marker=await readMarker(workspace,cache);
+          const gitdir=await worktreeGitDirectory(workspace,cache);
+          const markerPath=join(gitdir,"orchestrator.json");
+          const markerInfo=await lstat(markerPath).catch(error=>{
+            if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;
+            throw error;
+          });
+          const marker=markerInfo
+            ? await readMarker(workspace,cache)
+            : await this.recoverIncompleteWorktree(git,workspace,cache,lease,repository,baseBranch,baseline,branch,credential,gitdir);
           if(marker.run!==lease.id || marker.lifecycle!==lease.lifecycle || marker.project!==projectId || marker.repository!==repository || marker.base_branch!==baseBranch || marker.branch!==branch || !validSHA(marker.baseline))throw new Error("Existing task worktree identity does not match this lease.");
           return {path:workspace,branch,baseline:marker.baseline};
         }
@@ -170,6 +179,33 @@ export class RepositoryWorkspace {
     } finally {
       await release();
     }
+  }
+
+  private async recoverIncompleteWorktree(
+    git:(args:string[],cwd?:string)=>Promise<{output:string;code:number}>,
+    workspace:string,
+    cache:string,
+    lease:Lease,
+    repository:string,
+    baseBranch:string,
+    baseline:string,
+    branch:string,
+    credential:GitHubCredential,
+    gitdir:string
+  ):Promise<Marker> {
+    const listing=(await git(["--git-dir",cache,"worktree","list","--porcelain"])).output;
+    if(!listing.split("\n").some(line=>line==="worktree "+workspace))throw new Error("Unmarked task workspace is not registered in its managed repository.");
+    if((await git(["-C",workspace,"rev-parse","--show-toplevel"])).output!==workspace)throw new Error("Unmarked task workspace root does not match its managed path.");
+    if((await git(["-C",workspace,"rev-parse","HEAD"])).output!==baseline)throw new Error("Unmarked task workspace has changes and needs manual recovery.");
+    const status=await git(["-C",workspace,"-c","core.fsmonitor=false","-c","core.untrackedCache=false","status","--porcelain","--untracked-files=all"]);
+    if(status.output)throw new Error("Existing task workspace has changes and needs manual recovery.");
+    await git(["-C",workspace,"-c","core.hooksPath=/dev/null","switch","-C",branch,"--ignore-other-worktrees",baseline]);
+    await git(["-C",workspace,"config","user.name",credential.author_name]);
+    await git(["-C",workspace,"config","user.email",credential.author_email]);
+    await git(["-C",workspace,"config","core.hooksPath","/dev/null"]);
+    const marker:Marker={run:lease.id,lifecycle:lease.lifecycle,project:lease.project_id!,repository,base_branch:baseBranch,baseline,branch};
+    await writeFile(join(gitdir,"orchestrator.json"),JSON.stringify(marker),{mode:0o600,flag:"wx"});
+    return marker;
   }
 
   async writeProjectInstructions(workspace:string,instructions:unknown):Promise<string|undefined> {

@@ -93,10 +93,8 @@ defmodule DevOrchestrator.Delivery.Worker do
   end
 
   defp send_report("linear", _state, token, payload) do
-    if String.starts_with?(payload["source_key"], "linear:") and payload["state"] == "succeeded" and
-         payload["result"]["pr_url"] do
-      id = String.replace_prefix(payload["source_key"], "linear:", "")
-
+    with {:ok, id} <- Linear.issue_id_from_source_key(payload["source_key"]),
+         true <- payload["state"] == "succeeded" and is_binary(payload["result"]["pr_url"]) do
       query =
         "query($id:String!){issue(id:$id){team{states{nodes{id name}}} attachments{nodes{url}}}}"
 
@@ -138,7 +136,7 @@ defmodule DevOrchestrator.Delivery.Worker do
         _ -> :rejected
       end
     else
-      :not_configured
+      _ -> :not_configured
     end
   end
 end

@@ -7,7 +7,9 @@ const within = (root: string, candidate: unknown): boolean => {
 };
 
 export function authorizeFileChange(workspace: string, params: any): boolean {
-  return within(workspace, params?.grantRoot);
+  if (!within(workspace, params?.grantRoot)) return false;
+  const path = relative(resolve(workspace), resolve(params.grantRoot));
+  return path !== ".git" && !path.startsWith(".git" + sep);
 }
 
 export function authorizeCommand(workspace: string, allowedHosts: string[], params: any): boolean | Record<string, unknown> {

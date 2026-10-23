@@ -8,6 +8,8 @@ test("commands stay inside the project workspace and cannot expand filesystem ac
   assert.equal(authorizeCommand(workspace, [], { cwd: "/tmp/other-repo", command: "git status" }), false);
   assert.equal(authorizeCommand(workspace, [], { cwd: workspace, additionalPermissions: { filesystem: "write" } }), false);
   assert.equal(authorizeFileChange(workspace, { grantRoot: workspace + "/.agents/skills" }), true);
+  assert.equal(authorizeFileChange(workspace, { grantRoot: workspace + "/.git/config" }), false);
+  assert.equal(authorizeFileChange(workspace, { grantRoot: workspace + "/src/../.git/refs/heads/main" }), false);
   assert.equal(authorizeFileChange(workspace, { grantRoot: "/Users/juan/.codex/skills" }), false);
   assert.equal(authorizeFileChange(workspace, {}), false);
 });

@@ -1,7 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { AppServerSession } from "../../src/app-server/session.ts";
+import { AppServerSession, buildAppServerArgs } from "../../src/app-server/session.ts";
+
+test("agent permission profile can inspect but cannot modify shared Git metadata", () => {
+  const args = buildAppServerArgs([]);
+  const permissions = args.find(argument => argument.includes("permissions.dev-orchestrator.filesystem"));
+  assert.ok(permissions);
+  assert.match(permissions, /"\.git"="read"/);
+  assert.doesNotMatch(permissions, /"\.git"="write"/);
+});
 
 function child(outcome: "completed" | "blocked" = "completed") {
   return spawn(process.execPath, ["--input-type=module", "-e", `
@@ -21,7 +29,7 @@ function child(outcome: "completed" | "blocked" = "completed") {
       }
       if(message.method==='thread/resume')result={thread:{id:message.params.threadId}};
       if(message.method==='command/exec') {
-        if(message.params.sandboxPolicy || message.params.permissionProfile!=='dev-orchestrator' || message.params.timeoutMs>120000)process.exit(13);
+        if(message.params.sandboxPolicy || message.params.permissionProfile!=='dev-orchestrator' || message.params.timeoutMs>120000 || message.params.env.GIT_OPTIONAL_LOCKS!=='0')process.exit(13);
         result={exitCode:message.params.command[0]==='false'?1:0,stdout:'bounded output',stderr:''};
       }
       process.stdout.write(JSON.stringify({id:message.id,result})+'\\n');
