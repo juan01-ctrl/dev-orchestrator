@@ -1,13 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { command } from "./process.ts";
+import { command, CommandFailure } from "./process.ts";
 import { withGitHubCredential } from "./git-credential.ts";
 import type { GitHubCredential, Lease } from "./types.ts";
 import { validBranch, validRepository } from "./workspace.ts";
 
 type Marker={run:string;lifecycle:number;project:string;repository:string;base_branch:string;baseline:string;branch:string};
 type Options={remoteURL?:(repository:string)=>string;runCommand?:typeof command};
+export type RepositoryFailureCategory="github_permission_denied"|"github_unavailable"|"base_branch_missing"|"workspace_setup_failed";
+export class RepositoryPreparationFailure extends Error {
+  readonly category:RepositoryFailureCategory;
+  constructor(category:RepositoryFailureCategory) {
+    super("Repository preparation failed.");
+    this.category=category;
+  }
+}
 const validId=(value:unknown):value is string=>typeof value==="string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 const validSHA=(value:unknown):value is string=>typeof value==="string" && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value);
 
@@ -138,9 +146,16 @@ export class RepositoryWorkspace {
         return {path:workspace,branch,baseline};
       });
     } catch(error) {
+      if(error instanceof CommandFailure) {
+        const reason=error.reason;
+        const category:RepositoryFailureCategory=reason==="access_denied"?"github_permission_denied":reason==="network"?"github_unavailable":reason==="missing_ref"?"base_branch_missing":"workspace_setup_failed";
+        console.error(`Repository preparation failed: ${reason}.`);
+        throw new RepositoryPreparationFailure(category);
+      }
+      console.error("Repository preparation failed: local workspace error.");
       throw error instanceof Error && /Task repository|Managed repository|Selected base|Existing task|Task worktree/.test(error.message)
         ? error
-        : new Error("Repository setup failed. Check GitHub App access, repository selection, base branch, and local storage.",{cause:error});
+        : new RepositoryPreparationFailure("workspace_setup_failed");
     } finally {
       await release();
     }

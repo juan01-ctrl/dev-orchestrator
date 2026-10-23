@@ -255,7 +255,7 @@ defmodule DevOrchestratorWeb.DashboardComponents do
 
   defp failure_description("workspace_setup_failed"),
     do:
-      "Check local disk space and the connector's access to its managed data directory, then retry."
+      "The checkout failed on the local executor. Review its terminal log, repository access, and local storage before retrying."
 
   defp failure_description("authentication_required"),
     do: "Sign in to the official Codex CLI with the account that should run this task."

@@ -8,6 +8,7 @@ import { recover, emitDurably, execute, waitForClarification } from "../src/work
 import { execFileSync } from "node:child_process";
 import { RepositoryWorkspace } from "../src/repository.ts";
 import { Publisher } from "../src/publisher.ts";
+import { CommandFailure } from "../src/process.ts";
 
 test("lost final acknowledgement replays the same event instead of rerunning Codex",async()=>{
   const root=await mkdtemp(join(tmpdir(),"orchestrator-worker-"));
@@ -71,6 +72,39 @@ test("clarification timeout resolves with no answers instead of inventing contex
   const lease={id:"run-clarify-timeout",generation:1,lifecycle:1};
   const result=await waitForClarification({post:async()=>({status:"expired"})},lease,{questions:[]});
   assert.deepEqual(result,{response:{answers:{}},expired:true});
+});
+
+test("checkout failures report GitHub access or transport without claiming a disk failure",async()=>{
+  for(const [reason,category,kind] of [
+    ["access_denied","github_permission_denied","blocked"],
+    ["network","github_unavailable","failure"]
+  ] as const) {
+    const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-checkout-error-")));
+    try {
+      const projectId="11111111-1111-4111-8111-111111111111";
+      const runId="22222222-2222-4222-8222-222222222222";
+      const events:{kind:string;data:Record<string,unknown>}[]=[];
+      const repositories=new RepositoryWorkspace({runCommand:async()=>{throw new CommandFailure(reason);}});
+      await execute(
+        {version:2,server:"http://127.0.0.1:4100",token:"test"},
+        {post:async(path:string,payload:any)=>{
+          if(path==="/executor/github-token")return {token:"short-lived-test-token",expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};
+          if(path==="/executor/events"){
+            events.push({kind:payload.event.kind,data:payload.event.data});
+            return {state:payload.event.kind==="blocked"?"blocked":"queued"};
+          }
+          return {expires_in_ms:90_000};
+        }},
+        new Journal(join(root,"runtime")),
+        {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,title:"Test task",snapshot:{repository:"acme/app",base_branch:"main"}},sequence:0},
+        performance.now(),
+        new AbortController().signal,
+        {dataRoot:root,repositories}
+      );
+      assert.equal(events.at(-1)?.kind,kind);
+      assert.equal(events.at(-1)?.data.category,category);
+    } finally {await rm(root,{recursive:true,force:true});}
+  }
 });
 
 test("the worker bootstraps a repo, runs Codex, publishes a PR and keeps credentials out of the agent",async()=>{

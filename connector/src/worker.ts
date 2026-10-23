@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { Journal } from "./journal.ts";
 import { API, APIError } from "./api.ts";
 import { CodexSession, RepeatedFailureError, CodexBlockedError, CodexPolicyError } from "./codex.ts";
-import { RepositoryWorkspace } from "./repository.ts";
+import { RepositoryWorkspace, RepositoryPreparationFailure } from "./repository.ts";
 import { Publisher, type PublicationContext } from "./publisher.ts";
 import type { Config, JournalState } from "./types.ts";
 
@@ -221,6 +221,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     if(error instanceof APIError && ["github_installation_required","github_permission_denied","base_branch_missing","github_unavailable","local_policy_denied"].includes(error.code))phase=error.code;
     else if(error instanceof APIError && error.code==="provider_authentication")phase="github_permission_denied";
     else if(error instanceof APIError && ["provider_rejected","provider_rate_limit","provider_unavailable"].includes(error.code))phase="github_unavailable";
+    else if(error instanceof RepositoryPreparationFailure)phase=error.category;
     else if(error instanceof Error && /Selected base branch does not resolve to a commit/i.test(error.message))phase="base_branch_missing";
     else if(error instanceof Error && /Repository setup failed|worktree|managed repository cache|Task repository snapshot/i.test(error.message))phase="workspace_setup_failed";
     if(error instanceof CodexBlockedError)phase="missing_context";
