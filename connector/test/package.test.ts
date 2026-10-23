@@ -12,6 +12,16 @@ test("connector package exposes a runnable CLI without publishing the monorepo",
   assert.deepEqual(manifest.files, ["bin/", "dist/"]);
 });
 
+test("executor setup commands use the published connector release", async () => {
+  const dashboard = await readFile(
+    new URL("../platform/lib/dev_orchestrator_web/live/dashboard_live.ex", root),
+    "utf8",
+  );
+
+  assert.equal(manifest.version, "0.1.2");
+  assert.match(dashboard, new RegExp(`dev-orchestrator-connector@${manifest.version}`));
+});
+
 test("CLI wrapper targets built JavaScript instead of stripping TypeScript in node_modules", async () => {
   const wrapper = await readFile(new URL("bin/dev-orchestrator-connector.js", root), "utf8");
 
