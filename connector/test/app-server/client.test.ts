@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { AppServerClient } from "../../src/app-server/client.ts";
+import { AppServerSession } from "../../src/app-server/session.ts";
 
 function child() {
   return spawn(process.execPath, ["--input-type=module", "-e", `
@@ -53,4 +54,11 @@ test("JSON-RPC server errors reject only their matching request", async () => {
     await assert.rejects(client.request("unknown/method", {}), /Codex rejected the configured request/);
     assert.equal(client.isClosed(), false);
   } finally { client.close(); }
+});
+
+test("missing Codex binary reports the executable and operating-system error", async () => {
+  const session = AppServerSession.open({ binary: "missing-codex-test-binary", cwd: process.cwd() });
+  try {
+    await assert.rejects(session.initialize(), /missing-codex-test-binary.*ENOENT/);
+  } finally { session.close(); }
 });
