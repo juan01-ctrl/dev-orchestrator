@@ -251,13 +251,16 @@ defmodule DevOrchestrator.Connections do
       end)
 
     case loaded do
-      {:ok, {"github", secret}} -> GitHub.token(secret)
+      {:ok, {"github", secret}} ->
+        GitHub.token(secret)
+
       {:ok, {_provider, secret}} ->
         if is_binary(secret["access_token"]),
           do: {:ok, secret["access_token"]},
           else: {:error, :invalid_secret}
 
-      error -> error
+      error ->
+        error
     end
   end
 

@@ -40,10 +40,10 @@ defmodule DevOrchestrator.MailerStartupTest do
   end
 
   test "production mailer refuses to start without a Resend API key" do
-    runtime_env = Keyword.delete(@runtime_env, "RESEND_API_KEY")
+    runtime_env = Enum.reject(@runtime_env, fn {key, _value} -> key == "RESEND_API_KEY" end)
 
     with_runtime_env(runtime_env, fn ->
-      assert_raise KeyError, ~r/RESEND_API_KEY/, fn ->
+      assert_raise System.EnvError, ~r/RESEND_API_KEY/, fn ->
         Config.Reader.read!("config/runtime.exs", env: :prod)
       end
     end)

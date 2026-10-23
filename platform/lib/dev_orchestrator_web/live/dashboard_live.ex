@@ -614,7 +614,11 @@ defmodule DevOrchestratorWeb.DashboardLive do
                       else: "Connect #{provider_name(provider)}"}
                   </button>
                 </form>
-                <span :if={@connected_providers[provider]} class="connection-state is-connected" role="status">
+                <span
+                  :if={@connected_providers[provider]}
+                  class="connection-state is-connected"
+                  role="status"
+                >
                   <span class="connection-state-dot" aria-hidden="true"></span>
                   {provider_name(provider)} connected
                 </span>
@@ -629,7 +633,10 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 >
                   Connect {provider_name(provider)}
                 </button>
-                <span :if={@scope.role != "owner" and not @connected_providers[provider]} class="badge">
+                <span
+                  :if={@scope.role != "owner" and not @connected_providers[provider]}
+                  class="badge"
+                >
                   Workspace owner required
                 </span>
                 <span
@@ -745,7 +752,9 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   >
                     <.copy_icon /> <span class="copy-label">Copy command</span>
                   </button>
-                  <p class="fine muted">The code is single use. Next, start the connector and authorize a project.</p>
+                  <p class="fine muted">
+                    The code is single use. Next, start the connector and authorize a project.
+                  </p>
                 </div>
                 <p :if={!@code and @scope.role == "owner"} class="fine muted">
                   Create a one-time pairing code to begin.
@@ -764,8 +773,12 @@ defmodule DevOrchestratorWeb.DashboardLive do
               <div class="setup-step-content">
                 <div :for={e <- @executors} class="executor-card">
                   <div class="executor-card-heading">
-                    <div><h2>{e["name"]}</h2><p class="mono fine muted">{e["id"]}</p></div>
-                    <span class={if executor_status(e) == "Connected", do: "badge is-positive", else: "badge"}>{executor_status(e)}</span>
+                    <div>
+                      <h2>{e["name"]}</h2><p class="mono fine muted">{e["id"]}</p>
+                    </div>
+                    <span class={
+                      if executor_status(e) == "Connected", do: "badge is-positive", else: "badge"
+                    }>{executor_status(e)}</span>
                   </div>
                   <p class="fine muted">Run this command in a terminal and leave it open:</p>
                   <pre>npx --yes dev-orchestrator-connector@0.1.3 run --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
@@ -791,7 +804,10 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 </div>
               </div>
             </details>
-            <details :if={@scope.role == "owner" and @executors != [] and @projects != []} class="setup-step">
+            <details
+              :if={@scope.role == "owner" and @executors != [] and @projects != []}
+              class="setup-step"
+            >
               <summary>
                 <span class="step-number">3</span>
                 <span class="step-heading">Authorize a project<small>Choose which project this computer can access.</small></span>
@@ -800,12 +816,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
               <form class="setup-step-content" phx-submit="bind">
                 <label>
                   Executor<select name="executor_id"><option
-                      :for={e <- @executors}
-                      :if={!e["revoked_at"]}
-                      value={e["id"]}
-                    >{e["name"]}</option></select>
+                    :for={e <- @executors}
+                    :if={!e["revoked_at"]}
+                    value={e["id"]}
+                  >
+                    {e["name"]}
+                  </option></select>
                 </label>
-                <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>{p.name}</option></select></label>
+                <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>
+                  {p.name}
+                </option></select></label>
                 <button>Authorize project</button>
               </form>
             </details>
@@ -891,14 +911,28 @@ defmodule DevOrchestratorWeb.DashboardLive do
               <ol class="activity-list" aria-live="polite" aria-relevant="additions text">
                 <li
                   :for={{event, index} <- Enum.with_index(@events)}
-                  class={["activity-item", if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "is-current", else: nil)]}
-                  aria-current={if(@selected_run["state"] == "running" and index == length(@events) - 1, do: "step", else: nil)}
+                  class={[
+                    "activity-item",
+                    if(@selected_run["state"] == "running" and index == length(@events) - 1,
+                      do: "is-current",
+                      else: nil
+                    )
+                  ]}
+                  aria-current={
+                    if(@selected_run["state"] == "running" and index == length(@events) - 1,
+                      do: "step",
+                      else: nil
+                    )
+                  }
                 >
                   <span class="activity-marker" aria-hidden="true"></span>
                   <div class="activity-content">
                     <div class="activity-meta">
                       <strong>{activity_title(event)}</strong>
-                      <time class="mono fine muted">{Calendar.strftime(event["created_at"], "%H:%M:%S")}</time>
+                      <time class="mono fine muted">{Calendar.strftime(
+                        event["created_at"],
+                        "%H:%M:%S"
+                      )}</time>
                     </div>
                     <p class="fine muted">{activity_description(event)}</p>
                   </div>

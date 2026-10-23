@@ -11,14 +11,22 @@ defmodule DevOrchestrator.IntakeAuthorizationTest do
     {:ok, privileged_project} =
       Projects.create_project(privileged, %{
         "name" => "Privileged",
-        "repository" => "acme/privileged",
+        "repository" => "acme/privileged"
+      })
+
+    {:ok, privileged_project} =
+      Projects.update_project(privileged, privileged_project.id, %{
         "linear_team" => "team-private"
       })
 
     {:ok, restricted_project} =
       Projects.create_project(restricted, %{
         "name" => "Restricted",
-        "repository" => "acme/restricted",
+        "repository" => "acme/restricted"
+      })
+
+    {:ok, restricted_project} =
+      Projects.update_project(restricted, restricted_project.id, %{
         "linear_team" => "team-private"
       })
 
@@ -27,7 +35,12 @@ defmodule DevOrchestrator.IntakeAuthorizationTest do
 
     Store.exec(
       "INSERT INTO webhook_inbox(id,provider,delivery_id,organization_external_id,event) VALUES($1,'linear',$2,$3,$4)",
-      [Store.id(), "delivery-private", "linear-workspace", %{"issue_id" => "issue-private"}]
+      [
+        Store.id(),
+        "delivery-private",
+        "linear-workspace",
+        %{"action" => "create", "issue_id" => "issue-private"}
+      ]
     )
 
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)

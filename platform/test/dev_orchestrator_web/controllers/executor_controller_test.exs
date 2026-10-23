@@ -24,6 +24,18 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
       [scope.organization_id, project.id, "acme/app", 42, "acme"]
     )
 
+    connection_id = Store.id()
+
+    Store.exec(
+      "INSERT INTO connections(id,organization_id,provider,label,secret,external_id) VALUES($1,$2,'github','GitHub',decode('','hex'),'42')",
+      [connection_id, scope.organization_id]
+    )
+
+    Store.exec(
+      "INSERT INTO connection_grants(organization_id,project_id,connection_id) VALUES($1,$2,$3)",
+      [scope.organization_id, project.id, connection_id]
+    )
+
     %{executor_token: token, lease: lease}
   end
 
@@ -66,7 +78,7 @@ defmodule DevOrchestratorWeb.ExecutorControllerTest do
     )
 
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
-      assert opts[:json] == %{repositories: ["acme/app"], permissions: %{contents: "read"}}
+      assert opts[:json] == %{repositories: ["app"], permissions: %{contents: "read"}}
 
       {:ok,
        %{

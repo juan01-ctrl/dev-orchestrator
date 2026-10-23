@@ -234,7 +234,7 @@ defmodule DevOrchestrator.RunsTest do
       })
 
     {:ok, old_lease} = Runs.claim(ctx.executor)
-    assert :ok = Runs.cancel(ctx.scope, run["id"])
+    assert {:ok, %{state: "cancelled"}} = Runs.cancel(ctx.scope, run["id"])
     assert :ok = Runs.retry(ctx.scope, run["id"])
 
     assert {:ok, %{action: "archive", reason: "superseded", state: "queued"}} =
@@ -348,7 +348,7 @@ defmodule DevOrchestrator.RunsTest do
       assert opts[:url] == "https://api.github.com/app/installations/42/access_tokens"
 
       assert opts[:json] == %{
-               repositories: ["acme/app"],
+               repositories: ["app"],
                permissions: %{contents: "read"}
              }
 

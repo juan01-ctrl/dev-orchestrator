@@ -431,7 +431,9 @@ defmodule DevOrchestrator.Runs do
             sequence
           ])
 
-          if kind == "candidate", do: {:verify_candidate, run, data}, else: transition(run, kind, data)
+          if kind == "candidate",
+            do: {:verify_candidate, run, data},
+            else: transition(run, kind, data)
         end
       end)
       |> finalize_candidate_event()
@@ -694,6 +696,23 @@ defmodule DevOrchestrator.Runs do
         )
       )
 
+  defp transition(run, "no_changes", data) do
+    finish(
+      run,
+      "succeeded",
+      Map.merge(data, %{
+        "summary" =>
+          data["summary"] || "Completed without code changes; no pull request was created.",
+        "outcome" => "completed_no_changes"
+      })
+    )
+  end
+
+  defp transition(run, _, _) do
+    Store.exec("UPDATE runs SET state='running' WHERE id=$1", [run["id"]])
+    %{state: "running"}
+  end
+
   defp apply_candidate_verification(run, data, verification) do
     case verification do
       {:ok, result} ->
@@ -716,23 +735,6 @@ defmodule DevOrchestrator.Runs do
           )
         end
     end
-  end
-
-  defp transition(run, "no_changes", data) do
-    finish(
-      run,
-      "succeeded",
-      Map.merge(data, %{
-        "summary" =>
-          data["summary"] || "Completed without code changes; no pull request was created.",
-        "outcome" => "completed_no_changes"
-      })
-    )
-  end
-
-  defp transition(run, _, _) do
-    Store.exec("UPDATE runs SET state='running' WHERE id=$1", [run["id"]])
-    %{state: "running"}
   end
 
   defp resumable_thread_id?(thread_id) when is_binary(thread_id) do
