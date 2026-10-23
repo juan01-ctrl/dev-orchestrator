@@ -94,7 +94,7 @@ defmodule DevOrchestrator.Intake.Reconciler do
         else: filter
 
     query =
-      "query($after:String,$filter:IssueFilter){issues(first:100,after:$after,filter:$filter,orderBy:updatedAt){nodes{id identifier title description url updatedAt state{name} team{id} project{id}} pageInfo{hasNextPage endCursor}}}"
+      "query($after:String,$filter:IssueFilter){issues(first:100,after:$after,filter:$filter,orderBy:updatedAt){nodes{id identifier title description url updatedAt state{name} team{id} project{id} attachments{nodes{url}}} pageInfo{hasNextPage endCursor}}}"
 
     case Linear.query(token, query, %{"after" => cursor.page, "filter" => filter}) do
       {:ok, %{"data" => %{"issues" => %{"nodes" => issues, "pageInfo" => page_info}}}}
@@ -149,7 +149,7 @@ defmodule DevOrchestrator.Intake.Reconciler do
       :ok
     else
       query =
-        "query($filter:IssueFilter){issues(first:100,filter:$filter){nodes{id identifier title description url state{name} team{id} project{id}}}}"
+        "query($filter:IssueFilter){issues(first:100,filter:$filter){nodes{id identifier title description url state{name} team{id} project{id} attachments{nodes{url}}}}}"
 
       case Linear.query(token, query, %{"filter" => %{"id" => %{"in" => ids}}}) do
         {:ok, %{"data" => %{"issues" => %{"nodes" => issues}}}} when is_list(issues) ->

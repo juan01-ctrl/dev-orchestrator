@@ -17,7 +17,7 @@ defmodule DevOrchestrator.Intake.Linear do
                {:ok, %{"data" => %{"issue" => issue}}} when is_map(issue) <-
                  Client.query(
                    token,
-                   "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id}}}",
+                   "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id} attachments{nodes{url}}}}",
                    %{"id" => get_in(payload, ["data", "id"])}
                  ) do
             projects =

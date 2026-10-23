@@ -206,7 +206,7 @@ defmodule DevOrchestrator.Intake.Inbox do
          {:ok, %{"data" => %{"issue" => issue}}} <-
            DevOrchestrator.Connections.Linear.query(
              token,
-             "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id}}}",
+             "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id} attachments{nodes{url}}}}",
              %{"id" => row["event"]["issue_id"]}
            ) do
       if is_map(issue),

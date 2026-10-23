@@ -17,6 +17,21 @@ defmodule DevOrchestrator.Intake.LinearAssetsTest do
     refute image["id"] == csv["id"]
   end
 
+  test "extracts rich-description images and separately attached Linear files" do
+    description =
+      ~s(<linear-image>{"attrs":{"src":"https://uploads.linear.app/team/pasted.png?signature=private"}}</linear-image>)
+
+    attachments = [
+      %{"url" => "https://uploads.linear.app/team/attached.csv?signature=private"}
+    ]
+
+    assert %{assets: [pasted, attached], skipped_count: 0} =
+             LinearAssets.extract(description, attachments)
+
+    assert pasted["filename_hint"] == "pasted.png"
+    assert attached["filename_hint"] == "attached.csv"
+  end
+
   test "deduplicates repeated upload URLs" do
     url = "https://uploads.linear.app/team/file.csv?signature=private"
 

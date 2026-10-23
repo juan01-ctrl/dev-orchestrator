@@ -64,7 +64,7 @@ defmodule DevOrchestrator.Runs.Lifecycle do
     {title, prompt, private_context} = task_context(issue, source_context)
 
     Store.exec(
-      "UPDATE runs SET title=$3,prompt=$4,issue_url=$5,source_context=$6,updated_at=now() WHERE id=$1 AND organization_id=$2 AND state='queued' AND executor_id IS NULL AND sequence=0",
+      "UPDATE runs SET title=$3,prompt=$4,issue_url=$5,source_context=$6,updated_at=now() WHERE id=$1 AND organization_id=$2 AND ((state='queued' AND executor_id IS NULL) OR state IN ('blocked','failed','cancelled'))",
       [
         previous["run_id"],
         project["organization_id"],
@@ -129,7 +129,11 @@ defmodule DevOrchestrator.Runs.Lifecycle do
         240
       )
 
-    extracted = DevOrchestrator.Intake.LinearAssets.extract(issue["description"] || "")
+    extracted =
+      DevOrchestrator.Intake.LinearAssets.extract(
+        issue["description"] || "",
+        get_in(issue, ["attachments", "nodes"]) || []
+      )
 
     private_context = %{
       "linear_connection_id" => source_context["linear_connection_id"],

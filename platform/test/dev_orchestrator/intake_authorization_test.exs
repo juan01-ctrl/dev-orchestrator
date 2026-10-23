@@ -188,6 +188,73 @@ defmodule DevOrchestrator.IntakeAuthorizationTest do
              )
   end
 
+  test "a blocked Linear run receives current task assets before retry" do
+    scope = owner("asset-retry-owner@example.test")
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "Asset retry", "repository" => "acme/assets"})
+
+    {:ok, project} =
+      Projects.update_project(scope, project.id, %{"linear_team" => "team-assets"})
+
+    connect_linear(scope, project.id, "asset-retry-linear", "asset-retry-token")
+
+    issue = %{
+      "id" => "issue-assets",
+      "identifier" => "APP-1",
+      "title" => "Implement reference",
+      "description" => "Implement the supplied design.",
+      "url" => "https://linear.app/issue/APP-1",
+      "state" => %{"name" => "Todo"},
+      "team" => %{"id" => "team-assets"},
+      "project" => nil,
+      "attachments" => %{"nodes" => []}
+    }
+
+    assert {:ok, %{run_id: run_id}} =
+             Lifecycle.apply_issue(project.data, issue, %{
+               "linear_connection_id" => "asset-retry-linear"
+             })
+
+    {:ok, code} = Executors.create_enrollment(scope)
+    {:ok, %{token: token}} = Executors.enroll(code, %{"name" => "Local"})
+    {:ok, executor} = Executors.authenticate(token)
+    :ok = Executors.bind(scope, executor["id"], project.id)
+    {:ok, lease} = Runs.claim(executor)
+
+    assert {:ok, %{state: "blocked"}} =
+             Runs.append_event(executor, lease, %{
+               "sequence" => 1,
+               "kind" => "blocked",
+               "data" => %{
+                 "category" => "missing_context",
+                 "summary" => "The design reference was unavailable."
+               }
+             })
+
+    updated = %{
+      issue
+      | "description" =>
+          ~s(<linear-image>{"attrs":{"src":"https://uploads.linear.app/team/pasted.png?signature=private"}}</linear-image>),
+        "attachments" => %{
+          "nodes" => [
+            %{"url" => "https://uploads.linear.app/team/attached.png?signature=private"}
+          ]
+        }
+    }
+
+    assert {:ok, %{result: :unchanged}} =
+             Lifecycle.apply_issue(project.data, updated, %{
+               "linear_connection_id" => "asset-retry-linear"
+             })
+
+    assert :ok = Runs.retry(scope, run_id)
+    assert {:ok, retried} = Runs.claim(executor)
+
+    assert Enum.map(retried["snapshot"]["task_assets"], & &1["filename_hint"]) ==
+             ["pasted.png", "attached.png"]
+  end
+
   defp connect_linear(scope, project_id, id, token) do
     key = Application.fetch_env!(:dev_orchestrator, :encryption_key)
     secret = SecretBox.seal(Jason.encode!(%{"access_token" => token}), scope.organization_id, key)
