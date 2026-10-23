@@ -5,7 +5,6 @@ services:
     plan: free
     dockerfilePath: ./platform/Dockerfile
     dockerContext: ./platform
-    dockerCommand: /bin/sh -c "bin/dev_orchestrator eval 'DevOrchestrator.Release.migrate()' && bin/dev_orchestrator start"
     healthCheckPath: /api/v1/ready
     autoDeploy: true
     envVars:

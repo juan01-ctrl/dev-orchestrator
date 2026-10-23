@@ -14,7 +14,8 @@ FROM elixir:1.19.6-otp-28-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates openssl libstdc++6 && rm -rf /var/lib/apt/lists/* && useradd --create-home app
 WORKDIR /app
 COPY --from=build --chown=app:app /build/_build/prod/rel/dev_orchestrator ./
+COPY --chown=app:app start-render.sh ./start-render.sh
 USER app
 ENV PORT=4100 RELEASE_DISTRIBUTION=none
 EXPOSE 4100
-CMD ["bin/dev_orchestrator", "start"]
+CMD ["/bin/sh", "/app/start-render.sh"]
