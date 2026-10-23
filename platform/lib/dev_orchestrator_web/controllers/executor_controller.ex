@@ -44,6 +44,18 @@ defmodule DevOrchestratorWeb.ExecutorController do
 
   def reconcile(conn, _), do: conn |> put_status(422) |> json(%{error: "invalid_journal"})
 
+  def clarification_request(conn, %{"lease" => lease} = params),
+    do: authenticated(conn, &Runs.request_clarification(&1, lease, params))
+
+  def clarification_request(conn, _),
+    do: conn |> put_status(422) |> json(%{error: "invalid_clarification"})
+
+  def clarification_status(conn, %{"lease" => lease, "id" => id}),
+    do: authenticated(conn, &Runs.clarification_status(&1, lease, id))
+
+  def clarification_status(conn, _),
+    do: conn |> put_status(422) |> json(%{error: "clarification_not_found"})
+
   defp authenticated(conn, fun) do
     with ["Bearer " <> token] <- get_req_header(conn, "authorization"),
          {:ok, executor} <- Executors.authenticate(token) do

@@ -7,6 +7,7 @@ document.addEventListener("click", async (event) => {
   if (!button) return;
 
   const label = button.querySelector(".copy-label");
+  const defaultLabel = label?.textContent ?? "Copy command";
   try {
     await navigator.clipboard.writeText(button.dataset.copy);
     if (label) label.textContent = "Copied";
@@ -15,7 +16,7 @@ document.addEventListener("click", async (event) => {
   }
 
   window.setTimeout(() => {
-    if (label?.isConnected) label.textContent = "Copy command";
+    if (label?.isConnected) label.textContent = defaultLabel;
   }, 2000);
 });
 

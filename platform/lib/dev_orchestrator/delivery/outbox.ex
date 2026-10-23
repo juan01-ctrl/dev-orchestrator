@@ -29,6 +29,32 @@ defmodule DevOrchestrator.Delivery.Outbox do
     :ok
   end
 
+  def enqueue_clarification(run, clarification) do
+    payload = %{
+      "title" => run["title"],
+      "run_id" => run["id"],
+      "clarification_id" => clarification["id"],
+      "questions" => clarification["questions"],
+      "snapshot" => run["snapshot"] || %{},
+      "url" => Application.fetch_env!(:dev_orchestrator, :public_url) <> "/app/runs/" <> run["id"]
+    }
+
+    Store.exec(
+      "INSERT INTO outbox(id,organization_id,project_id,run_id,lifecycle,kind,payload) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(run_id,lifecycle,kind) DO NOTHING",
+      [
+        Store.id(),
+        run["organization_id"],
+        run["project_id"],
+        run["id"],
+        run["lifecycle"],
+        "slack:clarification:" <> clarification["id"],
+        payload
+      ]
+    )
+
+    :ok
+  end
+
   def claim do
     Store.transaction(fn ->
       # A prior worker may have sent the Slack request before it stopped.
@@ -38,7 +64,7 @@ defmodule DevOrchestrator.Delivery.Outbox do
 
       row =
         Store.one(
-          "SELECT * FROM outbox WHERE state='pending' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1"
+          "SELECT * FROM outbox WHERE state='pending' AND next_attempt_at<=now() ORDER BY next_attempt_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1"
         )
 
       if row,
@@ -51,16 +77,12 @@ defmodule DevOrchestrator.Delivery.Outbox do
   end
 
   def delivery_result(row, result) do
-    state =
-      case result do
-        :ok -> "sent"
-        :not_configured -> "not_configured"
-        :ambiguous -> "ambiguous"
-        :rejected -> if row["attempts"] < 2, do: "pending", else: "failed"
-        _ -> "failed"
-      end
+    outcome = DevOrchestrator.Delivery.Retry.result(row["attempts"], result)
 
-    Store.exec("UPDATE outbox SET state=$2 WHERE id=$1", [row["id"], state])
+    Store.exec(
+      "UPDATE outbox SET state=$2,last_error_category=$3,next_attempt_at=CASE WHEN $4::integer IS NULL THEN next_attempt_at ELSE now()+($4::text||' seconds')::interval END WHERE id=$1",
+      [row["id"], outcome.state, outcome.category, outcome.delay_seconds]
+    )
   end
 
   def list(scope, run_id),

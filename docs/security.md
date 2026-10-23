@@ -22,8 +22,10 @@ technical feasibility.
   repository access. The connector keeps a managed bare cache and creates an
   isolated worktree per task; no user-supplied local source path is trusted.
 - Codex receives an environment allowlist and a project-write permission profile;
-  Git metadata is writable but global provider configuration is not. The sandbox
-  must be enforced by a supported local Codex build. Agent network access is off.
+  Git metadata and project-scoped skills are writable, global provider configuration
+  and credential directories are not. Outbound agent network is disabled by default;
+  an exact single-host app-server amendment is accepted only when the host matches
+  the deployment allowlist. Arbitrary hosts and multi-host expansions are denied.
 - The control plane issues short-lived GitHub App tokens scoped to the exact
   repository and minimum purpose permissions after validating the live lease.
   Trusted Git publication uses a temporary owner-only credential helper, ignores
@@ -33,6 +35,11 @@ technical feasibility.
 - Durable fencing and sequence checks reject stale or duplicate run events.
   Executor revocation/cancellation takes effect on the next lease check; it does
   not magically undo an already-started external operation.
+- Clarification requests are tenant-, project-, lifecycle- and generation-scoped,
+  idempotent, bounded and expire after 20 minutes. Only the organization owner can
+  answer from the authenticated run page. Secret-input requests are rejected, and
+  question/answer text is redacted before storage and delivery. Slack sends a scoped
+  link to the run page; the message itself does not accept or store the answer.
 
 ## Limits requiring review before public rollout
 
@@ -42,10 +49,13 @@ encryption-key rotation, enterprise SSO and hosted customer execution are not
 implemented. Organization membership is supported, but public team invitation and
 organization-switching UI are intentionally deferred.
 
-The connector currently runs one task at a time. It preserves a PID lock after
-an unclean stop; only remove that exact lock after confirming no executor process
-is still using the credential. Do not copy a paired configuration across machines.
-Use distinct executor enrollments for distinct machines.
+The connector supports 1–10 local task slots via `DEV_ORCHESTRATOR_SLOTS` (default
+1). Each slot has its own journal and task checkout; project concurrency and
+executor binding still cap effective parallelism. Its owner-only PID lock refuses
+recovery while the recorded process is alive and uses a separate lock to coordinate
+recovery of a stale lock; malformed or unsafe locks fail closed. Do not copy a paired
+configuration across machines. Use distinct executor enrollments for distinct
+machines.
 
 The model provider receives task context, including source. Sanitized control-plane
 metadata can also contain repository names and issue titles. No blanket claim of

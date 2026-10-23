@@ -86,12 +86,14 @@ defmodule DevOrchestrator.Connections.GitHub do
       when is_integer(installation_id) and installation_id > 0 and is_binary(repository) and
              is_map_key(@token_permissions, purpose) do
     if DevOrchestrator.Policy.valid_repository?(repository) do
+      [_, repository_name] = String.split(repository, "/", parts: 2)
+
       with {:ok, jwt} <- jwt(),
            {:ok, %{"token" => token, "expires_at" => expires_at}}
            when is_binary(token) and token != "" and is_binary(expires_at) <-
              api(:post, "/app/installations/#{installation_id}/access_tokens", jwt,
                json: %{
-                 repositories: [repository],
+                 repositories: [repository_name],
                  permissions: Map.fetch!(@token_permissions, purpose)
                }
              ) do

@@ -28,9 +28,31 @@ export class Publisher {
     return this.trusted(async(git,sha)=>{
       const uncommitted=await git(["diff","--no-ext-diff","--no-textconv","--quiet",sha,"--"],true);
       const untracked=await git(["ls-files","--others","--exclude-standard"]);
-      if(uncommitted.code!==0 || untracked.output)throw new Error("Uncommitted changes remain. Codex must commit the task before publication.");
+      if(uncommitted.code!==0 || untracked.output)throw new Error("Uncommitted changes remain. The trusted connector must commit the task before publication.");
       const diff=await git(["diff","--no-ext-diff","--no-textconv","--quiet",this.context.baseline,sha,"--"],true);
       return {changed:diff.code===1,commit:sha};
+    },signal);
+  }
+
+  async commit(identifier:string,author:Pick<GitHubCredential,"author_name"|"author_email">,signal?:AbortSignal):Promise<{changed:boolean;commit:string}> {
+    if(!/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(identifier) ||
+      !author?.author_name || author.author_name.length>200 || /[\r\n\x00]/.test(author.author_name) ||
+      !author?.author_email || author.author_email.length>254 || /[\r\n\x00]/.test(author.author_email))throw new Error("Invalid task commit identity.");
+    return this.trusted(async(git,sha,_temp,objects,gitDir,commonDir)=>{
+      await git(["add","--all","--"]);
+      const staged=await git(["diff","--cached","--no-ext-diff","--no-textconv","--quiet",sha,"--"],true);
+      if(staged.code===0)return {changed:sha!==this.context.baseline,commit:sha};
+      const tree=(await git(["write-tree"])).output;
+      if(!validSHA(tree))throw new Error("Invalid staged task tree.");
+      const authorEnv={...cleanGitEnv(),GIT_OBJECT_DIRECTORY:objects,
+        GIT_AUTHOR_NAME:author.author_name,GIT_AUTHOR_EMAIL:author.author_email,
+        GIT_COMMITTER_NAME:author.author_name,GIT_COMMITTER_EMAIL:author.author_email};
+      const next=(await git(["commit-tree",tree,"-p",sha,"-m",`chore: deliver ${identifier}`],false,authorEnv)).output;
+      if(!validSHA(next))throw new Error("Invalid task commit.");
+      const env=cleanGitEnv();
+      await this.runCommand("git",["--git-dir",gitDir,"--work-tree",this.context.workspace,"read-tree",next],{env,signal});
+      await this.runCommand("git",["--git-dir",commonDir,"update-ref",`refs/heads/${this.context.branch}`,next,sha],{env,signal});
+      return {changed:next!==this.context.baseline,commit:next};
     },signal);
   }
 
@@ -95,7 +117,7 @@ export class Publisher {
     return {ok:response.ok,status:response.status,body:payload};
   }
 
-  private async trusted<T>(fn:(git:(args:string[],allowExitOne?:boolean,commandEnv?:NodeJS.ProcessEnv)=>Promise<{output:string;code:number}>,sha:string,temp:string,objects:string)=>Promise<T>,signal?:AbortSignal):Promise<T> {
+  private async trusted<T>(fn:(git:(args:string[],allowExitOne?:boolean,commandEnv?:NodeJS.ProcessEnv)=>Promise<{output:string;code:number}>,sha:string,temp:string,objects:string,gitDir:string,commonDir:string)=>Promise<T>,signal?:AbortSignal):Promise<T> {
     const workspace=await realpath(this.context.workspace);
     const pointer=join(workspace,".git");
     const stat=await lstat(pointer);
@@ -146,7 +168,7 @@ export class Publisher {
       const env={...cleanGitEnv(),GIT_OBJECT_DIRECTORY:objects};
       const git=(args:string[],allowExitOne=false,commandEnv:NodeJS.ProcessEnv=env)=>this.runCommand("git",["--git-dir",bare,"--work-tree",workspace,"-c","core.bare=false","-c","core.hooksPath=/dev/null",...args],{cwd:temporary,env:commandEnv,signal,allowExitOne});
       await git(["read-tree",sha]);
-      return await fn(git,sha,temporary,objects);
+      return await fn(git,sha,temporary,objects,gitDir,commonDir);
     } finally {await rm(temporary,{recursive:true,force:true});}
   }
 }

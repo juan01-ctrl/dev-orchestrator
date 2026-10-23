@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CodexSession } from "../src/codex.ts";
+import { CodexSession, CodexBlockedError } from "../src/codex.ts";
 import { spawn } from "node:child_process";
 
 function child(mode="ok") {
@@ -12,8 +12,13 @@ function child(mode="ok") {
       let result={};
       if(m.method==='account/read')result={account:{type:'chatgpt'}};
       if(m.method==='thread/start') {
+        if(${JSON.stringify(mode)}==='resume')process.exit(11);
         if(m.params.permissions!=='dev-orchestrator'||m.params.approvalPolicy!=='never')process.exit(8);
         result={thread:{id:'thread-test'}};
+      }
+      if(m.method==='thread/resume') {
+        if(m.params.threadId!=='thread-test')process.exit(12);
+        result={thread:{id:m.params.threadId}};
       }
       process.stdout.write(JSON.stringify({id:m.id,result})+'\\n');
       if(m.method==='turn/start') {
@@ -38,6 +43,18 @@ test("real stdio handshake completes a turn without uploading authentication mat
     await session.run("/tmp/task-checkout","Create a text file",undefined);
   } finally {session.stop();}
 });
+test("recovery resumes the existing Codex thread instead of starting a duplicate thread",async()=>{
+  const session=new CodexSession(child("resume"));
+  let persistedThread="";
+  try {
+    await session.initialize();
+    await session.run("/tmp/task-checkout","Continue the interrupted task",undefined,undefined,undefined,undefined,undefined,{
+      threadId:"thread-test",
+      onThreadStarted:async id=>{persistedThread=id;}
+    });
+    assert.equal(persistedThread,"thread-test");
+  } finally {session.stop();}
+});
 test("expected search misses inside the usual shell wrapper do not exhaust the budget",async()=>{
   const session=new CodexSession(child("search"));
   try {await session.initialize();await session.run("/tmp/task-checkout","Inspect the project",undefined);}
@@ -50,3 +67,8 @@ for(const mode of ["failed","malformed","null","exit","commands","no_final","mod
     finally {session.stop();}
   });
 }
+test("a structured blocked turn reaches the worker as a typed terminal blocker",async()=>{
+  const session=new CodexSession(child("model_blocked"));
+  try {await session.initialize();await assert.rejects(session.run("/tmp/task-checkout","Task"),CodexBlockedError);}
+  finally {session.stop();}
+});

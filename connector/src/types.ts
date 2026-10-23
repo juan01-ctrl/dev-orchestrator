@@ -3,4 +3,4 @@ export type TokenPurpose = "checkout" | "publish";
 export type GitHubCredential = { token: string; expires_at: string; author_name: string; author_email: string };
 export type Lease = { id: string; generation: number; lifecycle: number; project_id?: string; title?: string; prompt?: string; source_key?: string; snapshot?: Record<string, unknown>; expires_in_ms?: number; sequence?: number };
 export type RunEvent = { sequence: number; kind: string; data: Record<string, unknown> };
-export type JournalState = { lease: Lease; sequence: number; pending_event?: RunEvent; workspace?: string; baseline?: string };
+export type JournalState = { lease: Lease; sequence: number; pending_event?: RunEvent; workspace?: string; baseline?: string; thread_id?: string };

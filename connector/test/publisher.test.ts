@@ -12,7 +12,7 @@ const projectId="11111111-1111-4111-8111-111111111111";
 const runId="22222222-2222-4222-8222-222222222222";
 const credential={token:"short-lived-test-token",expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};
 
-async function fixture() {
+async function fixture(performCommit=true) {
   const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-publisher-")));
   const source=join(root,"source"),remote=join(root,"remote.git");
   await mkdir(source);await mkdir(remote);
@@ -24,7 +24,7 @@ async function fixture() {
   const lease={id:runId,project_id:projectId,generation:1,lifecycle:1,snapshot:{repository:"acme/app",base_branch:"main"}};
   const workspace=await repository.prepare(root,lease,credential);
   await writeFile(join(workspace.path,"change.txt"),"task change\n");
-  git(workspace.path,["add","change.txt"]);git(workspace.path,["commit","-m","test: add task change"]);
+  if(performCommit){git(workspace.path,["add","change.txt"]);git(workspace.path,["commit","-m","test: add task change"]);}
   return {root,remote,workspace,git};
 }
 
@@ -33,6 +33,21 @@ const pullRequest=(sha:string)=>({
   html_url:"https://github.com/acme/app/pull/17",
   head:{sha,ref:`task/${runId}`,repo:{full_name:"acme/app"}},
   base:{ref:"main",repo:{full_name:"acme/app"}}
+});
+
+test("trusted connector commits uncommitted task files without agent access to shared Git metadata",async()=>{
+  const f=await fixture(false);
+  try {
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline});
+    await assert.rejects(publisher.status(),/Uncommitted changes/);
+    const result=await publisher.commit("JUA-28",credential);
+    assert.equal(result.changed,true);
+    assert.equal(result.commit,f.git(f.workspace.path,["rev-parse","HEAD"]));
+    assert.equal(f.git(f.workspace.path,["show","-s","--format=%an <%ae>","HEAD"]),`${credential.author_name} <${credential.author_email}>`);
+    assert.equal(f.git(f.workspace.path,["show","-s","--format=%s","HEAD"]),"chore: deliver JUA-28");
+    assert.equal(f.git(f.workspace.path,["status","--porcelain"]),"");
+    assert.equal((await publisher.status()).changed,true);
+  } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
 test("pushes with a temporary app credential and creates a verified PR without gh",async()=>{
