@@ -5,14 +5,36 @@ defmodule DevOrchestrator.Intake.LinearAssets do
   @url_regex ~r/https:\/\/[^\s<>"']+/u
   @markdown_link_regex ~r/!?\[([^\]]*)\]\((https:\/\/[^\s<>"']+)\)/u
 
-  def extract(markdown) when is_binary(markdown) do
-    labels =
+  def extract(markdown, attachments \\ [])
+
+  def extract(markdown, attachments) when is_binary(markdown) and is_list(attachments) do
+    markdown_labels =
       Regex.scan(@markdown_link_regex, markdown, capture: :all_but_first)
       |> Map.new(fn [label, url] -> {clean_url(url), label} end)
 
-    urls =
+    attachment_labels =
+      Map.new(attachments, fn
+        %{"url" => url, "title" => title} when is_binary(url) and is_binary(title) ->
+          {clean_url(url), title}
+
+        %{"url" => url} when is_binary(url) ->
+          {clean_url(url), nil}
+
+        _ ->
+          {nil, nil}
+      end)
+      |> Map.delete(nil)
+
+    labels = Map.merge(attachment_labels, markdown_labels)
+
+    markdown_urls =
       Regex.scan(@url_regex, markdown, capture: :first)
       |> Enum.map(fn [url] -> clean_url(url) end)
+
+    attachment_urls = Map.keys(attachment_labels)
+
+    urls =
+      (markdown_urls ++ attachment_urls)
       |> Enum.uniq()
       |> Enum.filter(&linear_upload_url?/1)
 
@@ -31,7 +53,7 @@ defmodule DevOrchestrator.Intake.LinearAssets do
     }
   end
 
-  def extract(_), do: %{assets: [], skipped_count: 0}
+  def extract(_, _), do: %{assets: [], skipped_count: 0}
 
   def sanitize_description(description) when is_binary(description) do
     Regex.replace(~r/https?:\/\/[^\s<>"']+/u, description, fn raw ->
