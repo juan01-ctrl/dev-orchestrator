@@ -3,6 +3,25 @@ import { chmod, lstat, mkdir, open, readFile, realpath, rename, unlink } from "n
 import { basename, join, relative, resolve, sep } from "node:path";
 import type { Lease, MaterializedAsset, MaterializedAssets, TaskAsset } from "./types.ts";
 
+const IMAGE_EXTENSION = /\.(?:png|jpe?g|gif|webp)$/i;
+
+export class TaskReferenceError extends Error {}
+
+export async function taskImagePaths(report: MaterializedAssets | undefined, workspace: string, task: string): Promise<string[]> {
+  const requiresImage = /pixel[ -]?perfect|(?:reference|attached|supplied)\s+(?:image|design|screenshot)|(?:imagen|captura)\s+(?:adjunta|de referencia)|(?:match|copy|replicate|recreate|reproduce|copi[aá]|replic[aá]).{0,100}(?:image|imagen|screenshot|captura|reference|referencia)/i.test(task);
+  const images = (report?.available ?? []).filter(item => IMAGE_EXTENSION.test(item.filename));
+  const unavailableImage = report?.unavailable.some(item => IMAGE_EXTENSION.test(item.filename_hint));
+  if (unavailableImage || (requiresImage && (images.length === 0 || report?.skipped_count))) {
+    throw new TaskReferenceError("The required reference image is unavailable. Restore or attach the image and retry; implementation has not started.");
+  }
+  const paths: string[] = [];
+  for (const image of images) {
+    if (!await existingAsset(workspace, image)) throw new TaskReferenceError("The reference image is unavailable or changed after download. Retry to restore the reference before implementation.");
+    paths.push(resolve(workspace, image.relative_path));
+  }
+  return paths;
+}
+
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 const MAX_ASSETS = 10;
@@ -34,7 +53,7 @@ async function existingAsset(workspace: string, item: MaterializedAsset): Promis
   if (!path.startsWith(resolve(workspace) + sep)) return false;
   try {
     const stat = await lstat(path);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== item.size || (stat.mode & 0o222) !== 0) return false;
+    if (!stat.isFile() || stat.isSymbolicLink() || await realpath(path) !== path || stat.size !== item.size || (stat.mode & 0o222) !== 0) return false;
     const bytes = await readFile(path);
     return createHash("sha256").update(bytes).digest("hex") === item.sha256;
   } catch { return false; }
@@ -126,6 +145,6 @@ export function taskAssetsPrompt(report: MaterializedAssets, workspace: string):
   for (const item of report.available) lines.push(`- Available file: ${resolve(workspace, item.relative_path)}`);
   for (const item of report.unavailable) lines.push(`- Unavailable file ${item.filename_hint}: ${item.reason}`);
   if (report.skipped_count) lines.push(`- ${report.skipped_count} additional non-file or unsupported reference(s) were not loaded.`);
-  lines.push("Use these files as task evidence when relevant. If an unavailable file is indispensable, ask one concise clarification naming the file; otherwise continue and report the limitation.");
+  lines.push("Images are also attached directly to this turn as visual inputs. Inspect them before changing any reference-dependent UI. Follow the supplied layout, typography, spacing, colors, and content; do not substitute an imagined design. If a required reference cannot be seen or read, stop and report the precise blocker before editing or publishing. Never claim visual fidelity without inspecting the reference and comparing the rendered result. Other files remain available at the paths above. If an unavailable file is indispensable, ask one concise clarification naming the file; otherwise continue and report the limitation.");
   return lines.join("\n");
 }

@@ -112,7 +112,7 @@ export class AppServerSession extends EventEmitter {
     return threadId;
   }
 
-  runTurn(prompt: string, options: { cwd?: string; outputSchema?: unknown; effort?: string; onProgress?: (stage: ActivityStage) => Promise<void> } = {}): Promise<TurnResult> {
+  runTurn(prompt: string, options: { cwd?: string; outputSchema?: unknown; effort?: string; imagePaths?: string[]; onProgress?: (stage: ActivityStage) => Promise<void> } = {}): Promise<TurnResult> {
     if (!this.threadId) return Promise.reject(new Error("Start or resume a Codex thread before running a turn."));
     if (this.activeTurn) return Promise.reject(new Error("A Codex turn is already active in this session."));
     this.progress = options.onProgress;
@@ -120,7 +120,8 @@ export class AppServerSession extends EventEmitter {
     this.lastStage = undefined;
     const threadId = this.threadId;
     const completed = new Promise<TurnResult>((resolve, reject) => { this.activeTurn = { threadId, resolve, reject }; });
-    void this.client.request("turn/start", { threadId, ...(options.cwd ? { cwd: options.cwd } : {}), approvalPolicy: "never", permissions: "dev-orchestrator", ...(options.effort ? { effort: options.effort } : {}), input: [{ type: "text", text: prompt }], ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}) }).catch(error => this.activeTurn?.reject(error));
+    const input = [{ type: "text", text: prompt }, ...(options.imagePaths ?? []).map(path => ({ type: "localImage", path, detail: "original" }))];
+    void this.client.request("turn/start", { threadId, ...(options.cwd ? { cwd: options.cwd } : {}), approvalPolicy: "never", permissions: "dev-orchestrator", ...(options.effort ? { effort: options.effort } : {}), input, ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}) }).catch(error => this.activeTurn?.reject(error));
     return completed.finally(() => { this.activeTurn = undefined; this.progress = undefined; });
   }
 

@@ -9,7 +9,7 @@ import type { Config, JournalState } from "./types.ts";
 import { detectEnvironment, needsValidation, runEnvironmentCommands } from "./environment.ts";
 import { normalizeTaskResult, formatTaskReport, type BlockerCategory } from "./task-result.ts";
 import { setTimeout as delay } from "node:timers/promises";
-import { materializeTaskAssets, taskAssetsPrompt } from "./task-assets.ts";
+import { materializeTaskAssets, taskAssetsPrompt, taskImagePaths, TaskReferenceError } from "./task-assets.ts";
 
 type Transport={post:(path:string,payload:unknown)=>Promise<any>;downloadAsset?:(lease:JournalState["lease"],id:string,maxBytes?:number)=>Promise<{body:Buffer;filename:string;mediaType:string;sha256:string}>};
 type ExecutionDependencies={dataRoot?:string;repositories?:RepositoryWorkspace;publisherFactory?:(context:PublicationContext)=>Publisher};
@@ -144,7 +144,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     }
   },20_000);
   const timeBudget=setTimeout(()=>{timedOut=true;abort();},Math.max(0,state.deadline_at-Date.now()));
-  const blocked=(category:BlockerCategory,message:string):CodexBlockedError=>new CodexBlockedError(normalizeTaskResult({outcome:"blocked",summary:message,validation:state.result?.validation??[],blocker:{category,message,question:""}}));
+  const blocked=(category:BlockerCategory,message:string,question=""):CodexBlockedError=>new CodexBlockedError(normalizeTaskResult({outcome:"blocked",summary:message,validation:state.result?.validation??[],blocker:{category,message,question}}));
   const verify=async():Promise<string>=>{
     phase="publication_failed";
     while((state.verification_attempts??0)<3) {
@@ -204,6 +204,15 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         skipped_count:state.materialized_assets.skipped_count
       });
     }
+    const taskText=String(state.lease.title??"")+"\n"+String(state.lease.prompt??"");
+    let imagePaths:string[]=[];
+    if(state.phase!=="publish") {
+      try { imagePaths=await taskImagePaths(state.materialized_assets,workspace.path,taskText); }
+      catch(error) {
+        if(!(error instanceof TaskReferenceError))throw error;
+        throw blocked("missing_context",error.message,"Please attach or restore the required reference image, then retry this task.");
+      }
+    }
     const publicationContext={workspace:workspace.path,repository:String(snapshot.repository??""),baseBranch:String(snapshot.base_branch??""),branch:workspace.branch,baseline:workspace.baseline,gitDir:workspace.gitDir,commonDir:workspace.commonDir};
     const publisher=dependencies.publisherFactory?.(publicationContext)??new Publisher(publicationContext);
     if(state.phase!=="publish") {
@@ -220,6 +229,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         : "Implement this development task end to end in this isolated checkout.",
       "Read and respect the repository's AGENTS.md and project-scoped skills. Do not change global skills or configuration.",
       "Do not invent external access or credentials. Use the context request tool only for an indispensable user decision. Missing packages, failing checks, and provider errors are not missing context. Network access is limited to the exact hosts in the immutable task policy.",
+      "Never invent missing task evidence or silently approximate an explicit reference requirement. If an indispensable image or file cannot be inspected, report the specific blocker before editing. Do not claim pixel-perfect or visual verification unless you inspected both the reference and the rendered result.",
       instructionsPath
         ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
         : "Project instructions:\n"+String(snapshot.instructions??""),
@@ -248,6 +258,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       snapshot.execution_policy,
       {
         threadId:state.thread_id,
+        imagePaths,
         onThreadStarted:async threadId=>{state.thread_id=threadId;await journal.save(state);},
         onUserInput:async params=>{
           await writeEvent("progress",{stage:"waiting_for_context"});

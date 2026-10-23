@@ -50,7 +50,7 @@ export class CodexSession {
   initialize(): Promise<void> { return this.session.initialize(); }
   authenticated(): Promise<boolean> { return this.session.authenticated(); }
 
-  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; onThreadStarted?: (threadId: string) => Promise<void>; onUserInput?: (params: any) => Promise<unknown> } = {}): Promise<TaskResult> {
+  async run(workspace: string, prompt: string, model?: string, signal?: AbortSignal, onProgress?: (stage: ActivityStage) => Promise<void>, onEvent?: (event: PublicExecutionEvent) => Promise<void>, policy?: any, recovery: { threadId?: string; imagePaths?: string[]; onThreadStarted?: (threadId: string) => Promise<void>; onUserInput?: (params: any) => Promise<unknown> } = {}): Promise<TaskResult> {
     if (signal?.aborted) throw new Error("Task stopped before lease expiration.");
     if (policy && policy.valid === false) throw new CodexPolicyError("Configured model is not supported by this executor deployment.");
     const selectedModel = typeof policy?.model === "string" ? policy.model : model;
@@ -100,6 +100,7 @@ export class CodexSession {
         cwd: workspace,
         effort: typeof policy?.effort === "string" ? policy.effort : undefined,
         outputSchema: taskResultSchema,
+        imagePaths: recovery.imagePaths,
         onProgress
       });
       const repeated = new Promise<never>((_, reject) => {

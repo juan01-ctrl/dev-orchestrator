@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, readFile, realpath, readdir, rm, stat, symlink } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { materializeTaskAssets, taskAssetsPrompt } from "../src/task-assets.ts";
+import { materializeTaskAssets, taskAssetsPrompt, taskImagePaths } from "../src/task-assets.ts";
 import type { Lease } from "../src/types.ts";
 
 const file = Buffer.from("id,name\n1,alpha\n");
@@ -12,6 +12,23 @@ const hash = createHash("sha256").update(file).digest("hex");
 const lease: Lease = { id: "22222222-2222-4222-8222-222222222222", generation: 1, lifecycle: 1, snapshot: { task_assets: [
   { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", filename_hint: "../dataset.csv" }
 ], task_assets_skipped: 0 } };
+
+test("visual reference tasks stop before implementation when their image is unavailable", async () => {
+  await assert.rejects(taskImagePaths({ available: [], unavailable: [{ id: "asset", filename_hint: "signup.png", reason: "Download failed" }], skipped_count: 0 }, "/tmp/workspace", "Copy the attached signup screenshot pixel perfect"), /reference image.*unavailable/i);
+  await assert.rejects(taskImagePaths(undefined, "/tmp/workspace", "Copiá tal cual la imagen adjunta, pixel perfect"), /reference image.*unavailable/i);
+  assert.deepEqual(await taskImagePaths(undefined, "/tmp/workspace", "Fix a database migration"), []);
+  assert.deepEqual(await taskImagePaths(undefined, "/tmp/workspace", "Add screenshot tests to the test suite"), []);
+});
+
+test("only verified local images become multimodal inputs and modified files fail closed", async () => {
+  const workspace = await realpath(await mkdtemp(join(tmpdir(), "orchestrator-images-")));
+  try {
+    const report = await materializeTaskAssets({ downloadAsset: async () => ({ body: file, filename: "signup.png", mediaType: "image/png", sha256: hash }) }, lease, workspace);
+    assert.deepEqual(await taskImagePaths(report, workspace, "Match the attached image"), [join(workspace, report.available[0]!.relative_path)]);
+    await rm(join(workspace, report.available[0]!.relative_path));
+    await assert.rejects(taskImagePaths(report, workspace, "Match the attached image"), /reference image.*unavailable/i);
+  } finally { await rm(workspace, { recursive: true, force: true }); }
+});
 
 test("materializes an asset with a safe name, private permissions, and an untrusted-reference prompt", async () => {
   const workspace = await realpath(await mkdtemp(join(tmpdir(), "orchestrator-assets-")));

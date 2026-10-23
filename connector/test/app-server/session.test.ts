@@ -69,6 +69,24 @@ test("environment commands use the configured sandbox without a model turn and r
   } finally { session.close(); }
 });
 
+test("turn input includes reference images as native image content", async () => {
+  const session = new AppServerSession(child());
+  const requests: any[] = [];
+  const request = session.client.request.bind(session.client);
+  session.client.request = (method, params, timeout) => {
+    if (method === "turn/start") requests.push(params);
+    return request(method, params, timeout);
+  };
+  try {
+    await session.startThread({ cwd: "/tmp/task" });
+    await session.runTurn("Match the reference", { imagePaths: ["/tmp/task/reference.png"] });
+    assert.deepEqual(requests[0].input, [
+      { type: "text", text: "Match the reference" },
+      { type: "localImage", path: "/tmp/task/reference.png", detail: "original" }
+    ]);
+  } finally { session.close(); }
+});
+
 test("a structured blocked outcome is returned to the caller for terminal handling", async () => {
   const session = new AppServerSession(child("blocked"));
   try {
