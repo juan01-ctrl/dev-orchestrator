@@ -41,6 +41,19 @@ test("bootstraps a managed repository cache and isolated task worktree without a
   } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
+test("repository setup reports its failing stage without logging credential material",async()=>{
+  const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-repository-diagnostic-")));
+  const original=console.error;
+  const logs:string[]=[];
+  console.error=(...values:unknown[])=>logs.push(values.map(String).join(" "));
+  try {
+    const manager=new RepositoryWorkspace();
+    await assert.rejects(manager.prepare(root,lease("22222222-2222-4222-8222-222222222222"),{...credential,token:"secret value"}));
+    assert.match(logs.join("\n"),/credential_setup/);
+    assert.doesNotMatch(logs.join("\n"),/secret value/);
+  } finally {console.error=original;await rm(root,{recursive:true,force:true});}
+});
+
 test("reuses the matching task lifecycle and rejects repository, branch, and marker mismatches",async()=>{
   const f=await fixture();
   try {

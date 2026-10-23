@@ -109,9 +109,11 @@ export class RepositoryWorkspace {
     const branch=`task/${lease.id}`;
     const remote=this.remoteURL(repository);
     const release=await acquireLock(cache+".lock");
+    let stage="credential_setup";
     try {
       return await withGitHubCredential(dataRoot,credential,async env=>{
         const git=(args:string[],cwd?:string)=>this.runCommand("git",args,{cwd,env,timeout:120_000});
+        stage="cache_inspection";
         let cacheInfo=await lstat(cache).catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;throw error;});
         if(cacheInfo) {
           if(!cacheInfo.isDirectory() || cacheInfo.isSymbolicLink() || await realpath(cache)!==cache)throw new Error("Managed repository cache is unsafe.");
@@ -119,15 +121,18 @@ export class RepositoryWorkspace {
           const existing=(await git(["--git-dir",cache,"remote","get-url","origin"])).output;
           if(existing!==remote)throw new Error("Managed repository cache does not match the selected repository.");
         } else {
+          stage="cache_clone";
           await git(["-c","core.hooksPath=/dev/null","clone","--bare","--template=","--",remote,cache]);
           cacheInfo=await lstat(cache);
           if(!cacheInfo.isDirectory() || cacheInfo.isSymbolicLink())throw new Error("Repository checkout did not create a safe cache.");
           await chmod(cache,0o700);
         }
+        stage="base_fetch";
         await git(["--git-dir",cache,"-c","core.hooksPath=/dev/null","fetch","--prune","origin",`+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]);
         const baseline=(await git(["--git-dir",cache,"rev-parse",`refs/remotes/origin/${baseBranch}^{commit}`])).output;
         if(!validSHA(baseline))throw new Error("Selected base branch does not resolve to a commit.");
 
+        stage="workspace_inspection";
         const existingWorkspace=await lstat(workspace).catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;throw error;});
         if(existingWorkspace) {
           if(!existingWorkspace.isDirectory() || existingWorkspace.isSymbolicLink() || await realpath(workspace)!==workspace)throw new Error("Existing task worktree is unsafe.");
@@ -136,6 +141,7 @@ export class RepositoryWorkspace {
           return {path:workspace,branch,baseline:marker.baseline};
         }
 
+        stage="workspace_creation";
         await git(["--git-dir",cache,"worktree","add","--force","--detach",workspace,baseline]);
         await git(["-C",workspace,"-c","core.hooksPath=/dev/null","switch","-C",branch,"--ignore-other-worktrees",baseline]);
         await git(["-C",workspace,"config","user.name",credential.author_name]);
@@ -149,10 +155,11 @@ export class RepositoryWorkspace {
       if(error instanceof CommandFailure) {
         const reason=error.reason;
         const category:RepositoryFailureCategory=reason==="access_denied"?"github_permission_denied":reason==="network"?"github_unavailable":reason==="missing_ref"?"base_branch_missing":"workspace_setup_failed";
-        console.error(`Repository preparation failed: ${reason}.`);
+        console.error(`Repository preparation failed at ${stage}: ${reason}.`);
         throw new RepositoryPreparationFailure(category);
       }
-      console.error("Repository preparation failed: local workspace error.");
+      const code=error && typeof error==="object" && "code" in error && typeof error.code==="string" && /^[A-Z0-9_]+$/.test(error.code) ? ` (${error.code})` : "";
+      console.error(`Repository preparation failed at ${stage}: local workspace error${code}.`);
       throw error instanceof Error && /Task repository|Managed repository|Selected base|Existing task|Task worktree/.test(error.message)
         ? error
         : new RepositoryPreparationFailure("workspace_setup_failed");
