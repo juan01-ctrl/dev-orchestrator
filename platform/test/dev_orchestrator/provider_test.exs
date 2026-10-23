@@ -250,7 +250,7 @@ defmodule DevOrchestrator.ProviderTest do
       assert opts[:method] == :post
 
       assert opts[:json] == %{
-               repositories: ["acme/app"],
+               repositories: ["app"],
                permissions: %{contents: "read"}
              }
 
@@ -268,7 +268,7 @@ defmodule DevOrchestrator.ProviderTest do
   test "mints publish installation tokens with only contents and pull request write access" do
     Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
       assert opts[:json] == %{
-               repositories: ["acme/app"],
+               repositories: ["app"],
                permissions: %{contents: "write", pull_requests: "write"}
              }
 
