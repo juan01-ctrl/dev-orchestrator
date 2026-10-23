@@ -145,6 +145,12 @@ defmodule DevOrchestratorWeb.DashboardComponents do
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "pr_verifying"}}),
     do: "Verifying the pull request"
 
+  def activity_title(%{"kind" => "progress", "data" => %{"stage" => "task_context_ready"}}),
+    do: "Task reference files are ready"
+
+  def activity_title(%{"kind" => "progress", "data" => %{"stage" => "task_context_loading"}}),
+    do: "Loading task reference files"
+
   def activity_title(_), do: "Execution update"
 
   def activity_description(%{"kind" => "started"}),
@@ -196,6 +202,29 @@ defmodule DevOrchestratorWeb.DashboardComponents do
 
   def activity_description(%{"kind" => "progress", "data" => %{"stage" => "workspace_ready"}}),
     do: "The repository checkout and project instructions are ready."
+
+  def activity_description(%{
+        "kind" => "progress",
+        "data" => %{"stage" => "task_context_ready"} = data
+      }) do
+    available = data["available_count"] || 0
+    unavailable = data["unavailable_count"] || 0
+    skipped = data["skipped_count"] || 0
+
+    cond do
+      unavailable > 0 or skipped > 0 ->
+        "Loaded #{available} task reference file(s); #{unavailable + skipped} could not be loaded."
+
+      true ->
+        "Loaded #{available} task reference file(s) into the isolated workspace."
+    end
+  end
+
+  def activity_description(%{
+        "kind" => "progress",
+        "data" => %{"stage" => "task_context_loading"}
+      }),
+      do: "The executor is securely fetching the files attached to the Linear issue."
 
   def activity_description(%{"kind" => "progress", "data" => %{"stage" => "resuming_thread"}}),
     do:

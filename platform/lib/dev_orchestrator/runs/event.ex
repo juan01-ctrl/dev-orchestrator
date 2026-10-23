@@ -1,7 +1,7 @@
 defmodule DevOrchestrator.Runs.Event do
   @moduledoc "Bounded event data; raw provider/tool output is never persisted."
   @categories ~w(authentication_required local_policy_denied execution_failed publication_failed missing_context interrupted github_installation_required github_permission_denied base_branch_missing github_unavailable workspace_setup_failed environment_setup_failed validation_failed network_unavailable execution_timeout recovery_exhausted)
-  @progress_stages ~w(repository_preparing workspace_ready resuming_thread waiting_for_context agent_started working editing environment_preparing validating checks_passed publishing pr_verifying)
+  @progress_stages ~w(repository_preparing workspace_ready resuming_thread waiting_for_context agent_started working editing environment_preparing validating checks_passed publishing pr_verifying task_context_loading task_context_ready)
   @secret_pattern ~r/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/
 
   def sanitize(run, kind, data, previous_text)
@@ -73,6 +73,23 @@ defmodule DevOrchestrator.Runs.Event do
          else: safe
 
     {:ok, safe}
+  end
+
+  def sanitize(_, "progress", %{"stage" => "task_context_ready"} = data) do
+    count = fn key ->
+      case data[key] do
+        value when is_integer(value) and value >= 0 and value <= 10 -> value
+        _ -> 0
+      end
+    end
+
+    {:ok,
+     %{
+       "stage" => "task_context_ready",
+       "available_count" => count.("available_count"),
+       "unavailable_count" => count.("unavailable_count"),
+       "skipped_count" => count.("skipped_count")
+     }}
   end
 
   def sanitize(_, "progress", %{"stage" => stage}) when stage in @progress_stages,

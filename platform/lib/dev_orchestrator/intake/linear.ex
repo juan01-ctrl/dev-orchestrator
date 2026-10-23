@@ -26,7 +26,7 @@ defmodule DevOrchestrator.Intake.Linear do
                 [connection["id"], connection["organization_id"]]
               )
 
-            Enum.each(projects, &accept(&1, issue))
+            Enum.each(projects, &accept(&1, issue, connection["id"]))
             :accepted
           else
             _ -> Store.halt(:provider_unavailable)
@@ -40,7 +40,9 @@ defmodule DevOrchestrator.Intake.Linear do
     end
   end
 
-  def accept(project, issue) do
-    DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue)
+  def accept(project, issue, connection_id \\ nil) do
+    DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+      "linear_connection_id" => connection_id
+    })
   end
 end

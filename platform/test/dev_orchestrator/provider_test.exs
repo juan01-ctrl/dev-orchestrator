@@ -1,6 +1,6 @@
 defmodule DevOrchestrator.ProviderTest do
   use ExUnit.Case, async: false
-  alias DevOrchestrator.Connections.{GitHub, HTTP, Slack, OAuth}
+  alias DevOrchestrator.Connections.{GitHub, HTTP, Slack, OAuth, Linear}
 
   setup do
     old = Application.get_env(:dev_orchestrator, :provider_transport)
@@ -197,6 +197,87 @@ defmodule DevOrchestrator.ProviderTest do
     end)
 
     assert {:error, :provider_authentication} = HTTP.request(:get, "https://api.github.com/user")
+  end
+
+  test "Linear file downloads authenticate only the exact upload host and validate file content" do
+    body = "id,name\n1,alpha\n"
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      assert opts[:url] == "https://uploads.linear.app/private-file?signature=opaque"
+      assert opts[:method] == :get
+      assert opts[:redirect] == false
+      assert opts[:retry] == false
+      assert opts[:receive_timeout] == 15_000
+      assert {"authorization", "Bearer linear-private-token"} in opts[:headers]
+      assert {"accept-encoding", "identity"} in opts[:headers]
+      assert opts[:decode_body] == false
+      assert opts[:decompress_body] == false
+      assert is_function(opts[:into], 2)
+
+      response = %{
+        status: 200,
+        headers: %{
+          "content-type" => ["text/csv"],
+          "content-length" => [Integer.to_string(byte_size(body))]
+        },
+        private: %{}
+      }
+
+      {:cont, {_request, response}} = opts[:into].({:data, body}, {%{}, response})
+      {:ok, response}
+    end)
+
+    assert {:ok, %{body: ^body, filename: "data.csv", media_type: "text/csv", sha256: hash}} =
+             Linear.download_file(
+               "linear-private-token",
+               "https://uploads.linear.app/private-file?signature=opaque",
+               filename_hint: "data.csv"
+             )
+
+    assert hash == Base.encode16(:crypto.hash(:sha256, body), case: :lower)
+  end
+
+  test "Linear file downloads enforce streamed size and reject active content and unknown binary types" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      response = %{status: 200, headers: %{"content-type" => ["text/csv"]}, private: %{}}
+
+      {:halt, {_request, response}} =
+        opts[:into].({:data, :binary.copy("x", 10 * 1_024 * 1_024 + 1)}, {%{}, response})
+
+      {:ok, response}
+    end)
+
+    assert {:error, :file_too_large} =
+             Linear.download_file("linear-private-token", "https://uploads.linear.app/file.csv")
+
+    for {type, body} <- [
+          {"text/csv", "<html>no</html>"},
+          {"application/octet-stream", <<0, 1, 2>>}
+        ] do
+      Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+        response = %{status: 200, headers: %{"content-type" => [type]}, private: %{}}
+        {:cont, {_request, response}} = opts[:into].({:data, body}, {%{}, response})
+        {:ok, response}
+      end)
+
+      assert {:error, :unsupported_file} =
+               Linear.download_file("linear-private-token", "https://uploads.linear.app/file")
+    end
+  end
+
+  test "Linear file downloads never send credentials to lookalike or external hosts" do
+    Application.put_env(:dev_orchestrator, :provider_transport, fn _ ->
+      flunk("transport must not run")
+    end)
+
+    for url <- [
+          "https://uploads.linear.app.evil.example/file.csv",
+          "https://user@uploads.linear.app/file.csv",
+          "http://uploads.linear.app/file.csv",
+          "https://example.com/file.csv"
+        ] do
+      assert {:error, :invalid_file_url} = Linear.download_file("linear-private-token", url)
+    end
   end
 
   test "installation URL preserves opaque state for the GitHub setup callback" do

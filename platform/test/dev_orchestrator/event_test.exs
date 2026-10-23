@@ -79,6 +79,28 @@ defmodule DevOrchestrator.EventTest do
 
     assert {:error, :invalid_event} =
              Event.sanitize(%{}, "progress", %{"stage" => "arbitrary user content"})
+
+    assert {:ok,
+            %{
+              "stage" => "task_context_ready",
+              "available_count" => 2,
+              "unavailable_count" => 1,
+              "skipped_count" => 3
+            }} =
+             Event.sanitize(%{}, "progress", %{
+               "stage" => "task_context_ready",
+               "available_count" => 2,
+               "unavailable_count" => 1,
+               "skipped_count" => 3,
+               "filename" => "private.csv",
+               "source_url" => "https://uploads.linear.app/private"
+             })
+
+    assert {:ok, %{"stage" => "task_context_ready", "available_count" => 0}} =
+             Event.sanitize(%{}, "progress", %{
+               "stage" => "task_context_ready",
+               "available_count" => 1000
+             })
   end
 
   test "activity timeline events are allowlisted, bounded, and redact local paths and credentials" do
@@ -119,6 +141,7 @@ defmodule DevOrchestrator.EventTest do
           "repository_preparing",
           "resuming_thread",
           "waiting_for_context",
+          "task_context_loading",
           "pr_verifying"
         ] do
       assert {:ok, %{"stage" => ^stage}} =

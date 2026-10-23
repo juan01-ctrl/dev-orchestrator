@@ -102,6 +102,10 @@ A persistent twenty-minute budget includes reconnects and retries. Final reports
 include the actual summary, checks and any genuine context question; command output
 stays local. A new owner-triggered retry starts a new budget.
 
+Reference files uploaded into a Linear issue description are fetched securely
+and made available to Codex inside the task workspace. See [Linear task reference
+files](docs/operations/linear-task-assets.md) for supported formats and limits.
+
 ## Verification
 
 ```bash

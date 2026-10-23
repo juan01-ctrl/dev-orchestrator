@@ -61,7 +61,7 @@ test("runtime dependencies and package caches stay out of task commits without e
     const prepared=await manager.prepare(f.root,lease("22222222-2222-4222-8222-222222222222"),credential);
     await manager.excludeRuntimeFiles(prepared.path);
     await manager.excludeRuntimeFiles(prepared.path);
-    for(const directory of ["node_modules",".dev-orchestrator-cache/npm"]) {
+    for(const directory of ["node_modules",".dev-orchestrator-cache/npm",".dev-orchestrator-context/linear"]) {
       await mkdir(join(prepared.path,directory),{recursive:true});
       await writeFile(join(prepared.path,directory,"cache.txt"),"runtime data");
     }

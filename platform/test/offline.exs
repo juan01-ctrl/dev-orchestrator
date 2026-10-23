@@ -6,12 +6,12 @@ for app <- ~w(jason req),
     do: Code.append_path(path)
 
 for file <-
-      ~w(policy.ex runtime_config.ex execution_policy.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex connections/linear.ex runs/failure_budget.ex runs/event.ex runs/lifecycle.ex delivery/retry.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex) do
+      ~w(policy.ex runtime_config.ex execution_policy.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex intake/linear_assets.ex connections/linear.ex runs/failure_budget.ex runs/event.ex runs/lifecycle.ex delivery/retry.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex) do
   Code.require_file("lib/dev_orchestrator/" <> file)
 end
 
 ExUnit.start()
 
 for name <-
-      ~w(policy runtime_config execution_policy secret_box failure_budget event verification webhook provider intake runs_lifecycle delivery_retry),
+      ~w(policy runtime_config execution_policy secret_box failure_budget event verification webhook provider intake linear_assets runs_lifecycle delivery_retry),
     do: Code.require_file("test/dev_orchestrator/#{name}_test.exs")
