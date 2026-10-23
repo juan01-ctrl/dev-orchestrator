@@ -27,7 +27,7 @@ config :phoenix, :filter_parameters, [
 ]
 
 config :pbkdf2_elixir, :rounds, 600_000
-# Local, Test and SMTP adapters do not use an HTTP API client.
+# Local and Test adapters do not use an HTTP API client.
 config :swoosh, :api_client, false
 config :logger, :console, format: "$time $level $message\n"
 

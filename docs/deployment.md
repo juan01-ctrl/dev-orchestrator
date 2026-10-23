@@ -25,8 +25,8 @@ Required environment variables:
 | `POSTGRES_PASSWORD` | Unique database password supplied to the database service |
 | `SECRET_KEY_BASE` | At least 64 bytes of random session-signing/encryption material |
 | `CONNECTION_ENCRYPTION_KEY` | Base64-encoded 32 random bytes; back it up securely |
-| `SMTP_HOST`, `SMTP_PORT` | SMTP endpoint; default port 587 |
-| `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` | Account verification/reset delivery |
+| `RESEND_API_KEY` | Resend API key with permission to send email |
+| `MAIL_FROM` | Sender address on a verified Resend domain |
 
 Generate secrets locally using a password manager or your deployment's secret
 manager. Store them outside source control. Supply provider-app variables only
@@ -65,6 +65,51 @@ from 1 to 10 before starting it to enable multiple isolated local runs. Effectiv
 parallelism is still bounded by project concurrency and executor bindings. Each slot
 uses its own journal and task worktree while sharing the managed repository cache.
 
+## Free hosted evaluation (Render + Neon)
+
+The root `render.yaml` defines a single-instance free Docker web service. It
+uses the existing Phoenix release, runs database migrations at startup, and
+checks `/api/v1/ready`. Keep PostgreSQL outside Render: its free database
+expires after 30 days. Create a Neon project, then use its pooled connection
+string as `DATABASE_URL` in Render.
+
+This is for a first hosted evaluation, not production: Render's free web
+instance sleeps after 15 minutes without inbound traffic, can restart, and has
+an ephemeral filesystem. The database is durable, but keep the GitHub App key
+as a Render secret file, never in the image or repository. Transactional email
+uses Resend's HTTPS API, so SMTP port restrictions do not apply.
+
+1. Push this repository to GitHub and create a Render Blueprint from it. Render
+   reads the root `render.yaml` and asks for the values marked `sync: false`.
+2. Create a Neon database and set its pooled URL as `DATABASE_URL` in the
+   Render service's Environment page. Keep the URL private.
+3. The Blueprint maps `PUBLIC_URL` to Render's assigned HTTPS origin. Generate
+   `SECRET_KEY_BASE` locally with `openssl rand -hex 64` and
+   `CONNECTION_ENCRYPTION_KEY` with `openssl rand -base64 32`; enter each value
+   directly in Render, not in chat or source control. Back up the connection
+   key securely because it encrypts stored provider credentials.
+4. For email, create a Resend API key with sending access and verify the domain
+   used by `MAIL_FROM`. Set `RESEND_API_KEY` and `MAIL_FROM` in the Render
+   service environment. Resend's free plan currently includes 3,000 emails per
+   month, capped at 100 per day.
+5. In Render's Secret Files, upload the GitHub App PEM as
+   `/etc/secrets/github-app.pem`. Then add the GitHub, Linear, and Slack app
+   credentials to the service environment. `render.yaml` includes placeholders
+   for them; integrations can remain unset until configured.
+6. Update each provider's callback URL to use the Render origin. GitHub OAuth:
+   `/connections/github/callback`; GitHub App Setup URL:
+   `/connections/github/install/callback`; Linear OAuth:
+   `/connections/linear/callback`; Slack OAuth:
+   `/connections/slack/callback`. Configure Linear's webhook endpoint as
+   `/api/v1/webhooks/linear/CONNECTION_ID` for each authorized connection, with
+   the matching signing secret in `LINEAR_WEBHOOK_SECRET`.
+7. Open the Render service URL, register the owner account, verify email, then
+   connect provider accounts and pair a local executor using that public URL.
+
+Never commit populated environment files, OAuth secrets, Resend API keys, or the
+GitHub PEM. Render only prompts for `sync: false` values on initial Blueprint
+creation; add or rotate them later in the service's Environment page.
+
 ## Backup and recovery
 
 Back up PostgreSQL and the connection-encryption key separately. Restoring only
@@ -82,8 +127,9 @@ with the normal release migration command before starting updated binaries.
 
 ## Reproducibility and current validation limits
 
-The connector and platform both include lockfiles. The implementation harness
+The connector and platform have committed lockfiles. The implementation harness
 cannot run `mix test` because Mix.PubSub is denied a local TCP socket (`:eperm`);
 that environment restriction is not evidence that database-backed tests pass.
-Run the complete suite and migration checks in a normal local development
-environment before exposing the service.
+Run the complete PostgreSQL/authentication/UI suite, migration checks, and
+designated provider smoke test in a normal environment before exposing the
+service or treating it as production-ready.

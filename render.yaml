@@ -1,0 +1,47 @@
+services:
+  - type: web
+    name: dev-orchestrator
+    runtime: docker
+    plan: free
+    dockerfilePath: ./platform/Dockerfile
+    dockerContext: ./platform
+    healthCheckPath: /api/v1/ready
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: "10000"
+      - key: PUBLIC_URL
+        fromService:
+          type: web
+          name: dev-orchestrator
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY_BASE
+        sync: false
+      - key: CONNECTION_ENCRYPTION_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_SLUG
+        sync: false
+      - key: GITHUB_PRIVATE_KEY_PATH
+        value: /etc/secrets/github-app.pem
+      - key: LINEAR_CLIENT_ID
+        sync: false
+      - key: LINEAR_CLIENT_SECRET
+        sync: false
+      - key: LINEAR_WEBHOOK_SECRET
+        sync: false
+      - key: SLACK_CLIENT_ID
+        sync: false
+      - key: SLACK_CLIENT_SECRET
+        sync: false
