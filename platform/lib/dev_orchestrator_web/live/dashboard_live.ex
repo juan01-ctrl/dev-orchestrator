@@ -690,15 +690,36 @@ defmodule DevOrchestratorWeb.DashboardLive do
           <.heading
             eyebrow="Your account stays local"
             title="Execution, on your terms."
-            description="Pair a machine, approve its projects, and authorize repository roots on that machine. No inbound port is opened."
+            description="Pair a machine, authorize its projects, and run the connector with your existing Codex login. No inbound port is opened."
           />
+          <div :if={@scope.role == "owner"} class="panel">
+            <h2>Install the connector</h2>
+            <p>Install it in the connector's private directory, separate from your other Node.js projects:</p>
+            <pre>npm i --prefix "$HOME/.local/share/dev-orchestrator" dev-orchestrator-connector</pre>
+            <button
+              type="button"
+              class="secondary copy-command"
+              aria-label="Copy installation command"
+              data-copy={"npm i --prefix \"$HOME/.local/share/dev-orchestrator\" dev-orchestrator-connector"}
+            >
+              <.copy_icon /> <span class="copy-label">Copy install command</span>
+            </button>
+          </div>
           <button :if={@scope.role == "owner"} phx-click="pair">Create pairing code</button>
           <div :if={@code} class="panel">
             <h2>Pair within 10 minutes</h2>
-            <p>Run in the connector directory on the machine you want to use:</p>
-            <pre>node --experimental-strip-types src/cli.ts pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config /absolute/path/connector.json</pre>
+            <p>Run this on the computer that will process tasks:</p>
+            <pre>"$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector" pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
+            <button
+              type="button"
+              class="secondary copy-command"
+              aria-label="Copy pairing command"
+              data-copy={"\"$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector\" pair --server #{Application.fetch_env!(:dev_orchestrator, :public_url)} --code #{@code} --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
+            >
+              <.copy_icon /> <span class="copy-label">Copy command</span>
+            </button>
             <p class="fine">
-              This code is single use. Project access must still be granted below and locally.
+              This code is single use. Project access must still be granted below.
             </p>
           </div>
           <.empty
@@ -712,6 +733,15 @@ defmodule DevOrchestratorWeb.DashboardLive do
               <span class="badge">{executor_status(e)}</span>
               <p class="mono fine">{e["id"]}</p>
             </div>
+            <button
+              :if={@scope.role == "owner" and !e["revoked_at"]}
+              type="button"
+              class="secondary copy-command"
+              aria-label="Copy start command"
+              data-copy={"\"$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector\" run --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
+            >
+              <.copy_icon /> <span class="copy-label">Copy command</span>
+            </button>
             <button
               :if={@scope.role == "owner" and !e["revoked_at"]}
               phx-click="revoke"
@@ -739,9 +769,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
             <label>Project<select name="project_id"><option :for={p <- @projects} value={p.id}>
               {p.name}
             </option></select></label><button>Authorize project</button>
-            <p class="fine muted">
-              {length(@bindings)} project bindings configured. The local allowlist is still required.
-            </p>
+            <p class="fine muted">{length(@bindings)} project bindings configured.</p>
           </form>
         </section>
         <section :if={@live_action == :runs}>

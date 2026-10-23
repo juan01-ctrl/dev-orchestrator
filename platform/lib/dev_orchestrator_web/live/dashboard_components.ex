@@ -48,6 +48,15 @@ defmodule DevOrchestratorWeb.DashboardComponents do
     """
   end
 
+  def copy_icon(assigns) do
+    ~H"""
+    <svg viewBox="0 0 20 20" width="18" height="18" fill="none" aria-hidden="true">
+      <rect x="7" y="6" width="9" height="11" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+      <path d="M13 6V4.5A1.5 1.5 0 0 0 11.5 3h-7A1.5 1.5 0 0 0 3 4.5v9A1.5 1.5 0 0 0 4.5 15H7" stroke="currentColor" stroke-width="1.5" />
+    </svg>
+    """
+  end
+
   attr(:runs, :list, required: true)
 
   def run_list(assigns) do
