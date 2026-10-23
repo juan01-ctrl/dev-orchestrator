@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { AppServerSession } from "../../src/app-server/session.ts";
 
-function child() {
+function child(outcome: "completed" | "blocked" = "completed") {
   return spawn(process.execPath, ["--input-type=module", "-e", `
     import readline from 'node:readline';
     const rl=readline.createInterface({input:process.stdin});
@@ -26,7 +26,7 @@ function child() {
         if(message.params.threadId!=='thread-session-test')process.exit(8);
         turn++;
         process.stdout.write(JSON.stringify({method:'item/agentMessage/delta',params:{threadId:'thread-session-test',turnId:'turn-'+turn,itemId:'item-'+turn,delta:'Working on the task.'}})+'\\n');
-        process.stdout.write(JSON.stringify({method:'item/completed',params:{threadId:'thread-session-test',turnId:'turn-'+turn,item:{type:'agentMessage',text:JSON.stringify({outcome:'completed'})}}})+'\\n');
+        process.stdout.write(JSON.stringify({method:'item/completed',params:{threadId:'thread-session-test',turnId:'turn-'+turn,item:{type:'agentMessage',text:JSON.stringify({outcome:${JSON.stringify(outcome)}})}}})+'\\n');
         process.stdout.write(JSON.stringify({method:'turn/completed',params:{threadId:'thread-session-test',turn:{status:'completed'}}})+'\\n');
       }
     });
@@ -46,6 +46,15 @@ test("session initializes once, discovers profiles, starts and resumes a persist
     assert.equal(await session.resumeThread(threadId, { cwd: "/tmp/task", permissions: "dev-orchestrator" }), threadId);
     assert.equal((await session.runTurn("Second turn")).status, "completed");
     assert.equal(events.filter((event: any) => event.kind === "message_delta").length, 2);
+  } finally { session.close(); }
+});
+
+test("a structured blocked outcome is returned to the caller for terminal handling", async () => {
+  const session = new AppServerSession(child("blocked"));
+  try {
+    await session.initialize();
+    await session.startThread({ cwd: "/tmp/task", permissions: "dev-orchestrator" });
+    assert.deepEqual(await session.runTurn("Do the work"), { status: "completed", outcome: "blocked" });
   } finally { session.close(); }
 });
 

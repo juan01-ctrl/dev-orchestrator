@@ -23,7 +23,11 @@ export class AppServerClient extends EventEmitter {
       this.stderr = (this.stderr + String(chunk)).slice(-8_192);
     });
     child.stdin.on("error", () => this.fail(new Error("Codex app-server transport closed.")));
-    child.on("error", () => this.fail(new Error("Codex app-server could not start.")));
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      const executable = error.path ?? "codex";
+      const code = error.code ?? "unknown error";
+      this.fail(new Error(`Codex executable ${executable} could not start (${code}). Check the executable in PATH and that its working directory exists.`));
+    });
     child.on("close", code => this.fail(new Error(code === 0 ? "Codex app-server stopped." : "Codex app-server exited unexpectedly.")));
   }
 
