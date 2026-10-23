@@ -41,11 +41,11 @@ defmodule DevOrchestratorWeb.DashboardLive do
   end
 
   defp dispatch("create_project", params, socket) do
-    case consume_instructions(socket, :required) do
+    case consume_instructions(socket) do
       {:ok, instructions} ->
         case Projects.create_project(
                socket.assigns.scope,
-               Map.put(params, "instructions", instructions)
+               Map.put(params, "instructions", instructions || Projects.default_instructions())
              ) do
           {:ok, project} ->
             {:noreply, push_navigate(socket, to: "/app/projects/" <> project.id)}
@@ -65,7 +65,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
   end
 
   defp dispatch("save_project", params, socket) do
-    case consume_instructions(socket, :optional) do
+    case consume_instructions(socket) do
       {:ok, instructions} ->
         params = if instructions, do: Map.put(params, "instructions", instructions), else: params
 
@@ -155,7 +155,7 @@ defmodule DevOrchestratorWeb.DashboardLive do
 
   defp dispatch(_, _, socket), do: {:noreply, socket}
 
-  defp consume_instructions(socket, requirement) do
+  defp consume_instructions(socket) do
     upload = socket.assigns.uploads.instructions
 
     if Enum.any?(upload.entries, &(not &1.valid?)) do
@@ -173,14 +173,10 @@ defmodule DevOrchestratorWeb.DashboardLive do
              {:ok, result}
            end) do
         [result] -> result
-        [] when requirement == :required -> {:error, :required}
         [] -> {:ok, nil}
       end
     end
   end
-
-  defp instruction_error(:required),
-    do: "Upload a non-empty instructions.md file to create this project."
 
   defp instruction_error(:invalid_filename), do: "Choose the file named instructions.md."
   defp instruction_error(:too_large), do: "The instructions file must be 32 KB or smaller."
@@ -372,16 +368,16 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   placeholder="owner/repository"
                   required
                 /><.field name="base_branch" label="PR target branch" value="main" required />
-                <label>Project instructions</label>
+                <label>Project instructions (optional)</label>
                 <p class="fine">
                   <a href="/templates/instructions.md" download="instructions.md">
                     Download instructions.md template
                   </a>
                 </p>
                 <p class="fine muted">
-                  Upload a non-empty UTF-8 Markdown file named instructions.md (32 KB max).
+                  Upload instructions.md to customize this project. If you skip it, the default template is used.
                 </p>
-                <.live_file_input upload={@uploads.instructions} required />
+                <.live_file_input upload={@uploads.instructions} />
                 <p :if={@instruction_error} id="instructions-error" role="alert" class="fine error">
                   {@instruction_error}
                 </p>

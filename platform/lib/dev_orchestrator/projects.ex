@@ -100,6 +100,11 @@ defmodule DevOrchestrator.Projects do
 
   def validate_instructions(_, _), do: {:error, :invalid_file}
 
+  def default_instructions do
+    Application.app_dir(:dev_orchestrator, "priv/static/templates/instructions.md")
+    |> File.read!()
+  end
+
   defp public(row),
     do: %{
       id: row["id"],

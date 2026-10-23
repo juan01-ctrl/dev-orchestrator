@@ -70,10 +70,18 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
 
   test "repository access blockers point to the project setup action without exposing provider details" do
     scope = owner("repository-blocker@example.test")
-    {:ok, project} = Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
-    {:ok, run} = DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Edit"})
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    {:ok, run} =
+      DevOrchestrator.Runs.create(scope, project.id, %{"title" => "Task", "prompt" => "Edit"})
+
     {:ok, code} = DevOrchestrator.Executors.create_enrollment(scope)
-    {:ok, %{token: executor_token}} = DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+
+    {:ok, %{token: executor_token}} =
+      DevOrchestrator.Executors.enroll(code, %{"name" => "Runner"})
+
     {:ok, executor} = DevOrchestrator.Executors.authenticate(executor_token)
     :ok = DevOrchestrator.Executors.bind(scope, executor["id"], project.id)
     {:ok, lease} = DevOrchestrator.Runs.claim(executor)
@@ -94,7 +102,10 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, html} = live(conn, "/app/runs/" <> run["id"])
 
     assert html =~ "GitHub App access is not set up for this repository"
-    assert render(view) =~ "Install the configured GitHub App for this repository, then retry the task."
+
+    assert render(view) =~
+             "Install the configured GitHub App for this repository, then retry the task."
+
     refute render(view) =~ "sensitive provider details"
   end
 
@@ -105,6 +116,9 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     {:ok, view, html} = live(conn, "/app")
     assert html =~ "Start with one project"
     assert html =~ ~s(href="/templates/instructions.md" download="instructions.md")
+    assert html =~ "Project instructions (optional)"
+    assert html =~ "If you skip it, the default template is used."
+    refute has_element?(view, "input[name='instructions'][required]")
 
     upload =
       file_input(view, "form[phx-submit=create_project]", :instructions, [
@@ -145,22 +159,25 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert html =~ "<details"
   end
 
-  test "project creation requires a valid instructions file" do
-    scope = owner("required-upload@example.test")
+  test "project creation uses the default instructions template when no file is uploaded" do
+    scope = owner("optional-upload@example.test")
     {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
     conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
     {:ok, view, _html} = live(conn, "/app")
 
     view
     |> form("form[phx-submit=create_project]", %{
-      "name" => "No instructions",
-      "repository" => "acme/no-instructions",
+      "name" => "Default instructions",
+      "repository" => "acme/default-instructions",
       "base_branch" => "main"
     })
     |> render_submit()
 
-    assert render(view) =~ "Upload a non-empty instructions.md file"
-    assert [] = Projects.list(scope)
+    [project] = Projects.list(scope)
+    assert_redirect(view, "/app/projects/" <> project.id)
+    assert {:ok, project} = Projects.get_project(scope, project.id)
+    assert project.data["instructions"] =~ "## Project context"
+    assert project.data["instructions"] =~ "## Validation"
   end
 
   test "project rules can replace instructions but invalid uploads preserve the saved version" do
@@ -315,7 +332,9 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
   test "project connections show connected status for GitHub, Linear, and Slack" do
     configure_github_app()
     scope = owner("all-connections-ui@example.test")
-    {:ok, project} = Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
+
+    {:ok, project} =
+      Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
 
     DevOrchestrator.Store.exec(
       "INSERT INTO github_app_installations(organization_id,project_id,repository,installation_id,account) VALUES($1,$2,$3,$4,$5)",
