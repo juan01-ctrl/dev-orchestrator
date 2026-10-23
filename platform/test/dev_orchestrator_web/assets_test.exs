@@ -19,4 +19,13 @@ defmodule DevOrchestratorWeb.AssetsTest do
     refute conn.resp_body =~ "OpenAI"
     refute conn.resp_body =~ "WORKFLOW.md"
   end
+
+  test "serves the clipboard interaction used by executor command buttons" do
+    conn = Plug.Test.conn(:get, "/assets/app.js")
+    conn = Endpoint.call(conn, Endpoint.init([]))
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "navigator.clipboard.writeText"
+    assert conn.resp_body =~ "Copy failed"
+  end
 end

@@ -20,6 +20,32 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(build_conn(), "/app")
   end
 
+  test "executor page provides copyable install, pairing, and run commands" do
+    scope = owner("executor-commands@example.test")
+    {:ok, token} = Accounts.login(scope.email, "a-long-test-password")
+    conn = build_conn() |> Plug.Test.init_test_session(%{session_token: token})
+    {:ok, view, _html} = live(conn, "/app/executors")
+
+    view |> element("button[phx-click='pair']") |> render_click()
+
+    pairing_html = render(view)
+    assert pairing_html =~ "npm i --prefix \"$HOME/.local/share/dev-orchestrator\" dev-orchestrator-connector"
+    assert pairing_html =~ "aria-label=\"Copy installation command\""
+    assert pairing_html =~ "$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector pair"
+    assert pairing_html =~ "aria-label=\"Copy pairing command\""
+
+    {:ok, enrollment_code} = DevOrchestrator.Executors.create_enrollment(scope)
+
+    {:ok, %{token: executor_token}} =
+      DevOrchestrator.Executors.enroll(enrollment_code, %{"name" => "Commands runner"})
+
+    assert {:ok, _executor} = DevOrchestrator.Executors.authenticate(executor_token)
+
+    {:ok, _view, html} = live(conn, "/app/executors")
+    assert html =~ "$HOME/.local/share/dev-orchestrator/node_modules/.bin/dev-orchestrator-connector run"
+    assert html =~ "aria-label=\"Copy start command\""
+  end
+
   test "run details show safe execution activity and identify the current stage" do
     scope = owner("activity@example.test")
 
