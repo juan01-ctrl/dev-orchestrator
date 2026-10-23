@@ -266,7 +266,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
 
     {:ok, _view, html} = live(conn, "/app/executors")
 
-    assert html =~ "dev-orchestrator-connector@0.1.0 run --config"
+    assert html =~ "dev-orchestrator-connector@0.1.1 run --config"
     assert html =~ "Copy start command"
     assert html =~ "Pair this computer"
     assert html =~ "Start the connector"

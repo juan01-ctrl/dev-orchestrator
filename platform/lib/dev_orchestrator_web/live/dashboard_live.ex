@@ -720,12 +720,12 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 <div :if={@code}>
                   <h2>Pair within 10 minutes</h2>
                   <p>Run this command on the computer that will process tasks:</p>
-                  <pre>mkdir -p "$HOME/.local/share/dev-orchestrator" && npx --yes dev-orchestrator-connector@0.1.0 pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
+                  <pre>mkdir -p "$HOME/.local/share/dev-orchestrator" && npx --yes dev-orchestrator-connector@0.1.1 pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
                   <button
                     type="button"
                     class="secondary copy-command"
                     aria-label="Copy pairing command"
-                    data-copy={"mkdir -p \"$HOME/.local/share/dev-orchestrator\" && npx --yes dev-orchestrator-connector@0.1.0 pair --server #{Application.fetch_env!(:dev_orchestrator, :public_url)} --code #{@code} --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
+                    data-copy={"mkdir -p \"$HOME/.local/share/dev-orchestrator\" && npx --yes dev-orchestrator-connector@0.1.1 pair --server #{Application.fetch_env!(:dev_orchestrator, :public_url)} --code #{@code} --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
                   >
                     <.copy_icon /> <span class="copy-label">Copy command</span>
                   </button>
@@ -752,14 +752,14 @@ defmodule DevOrchestratorWeb.DashboardLive do
                     <span class={if executor_status(e) == "Connected", do: "badge is-positive", else: "badge"}>{executor_status(e)}</span>
                   </div>
                   <p class="fine muted">Run this command in a terminal and leave it open:</p>
-                  <pre>npx --yes dev-orchestrator-connector@0.1.0 run --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
+                  <pre>npx --yes dev-orchestrator-connector@0.1.1 run --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
                   <div class="executor-card-actions">
                     <button
                       :if={@scope.role == "owner" and !e["revoked_at"]}
                       type="button"
                       class="secondary copy-command"
                       aria-label="Copy start command"
-                      data-copy={"npx --yes dev-orchestrator-connector@0.1.0 run --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
+                      data-copy={"npx --yes dev-orchestrator-connector@0.1.1 run --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
                     >
                       <.copy_icon /> <span class="copy-label">Copy command</span>
                     </button>
