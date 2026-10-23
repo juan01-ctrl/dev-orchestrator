@@ -48,9 +48,9 @@ test("repository setup reports its failing stage without logging credential mate
   console.error=(...values:unknown[])=>logs.push(values.map(String).join(" "));
   try {
     const manager=new RepositoryWorkspace();
-    await assert.rejects(manager.prepare(root,lease("22222222-2222-4222-8222-222222222222"),{...credential,token:"secret value"}));
+    await assert.rejects(manager.prepare(root,lease("22222222-2222-4222-8222-222222222222"),{...credential,token:"secret\nvalue"}));
     assert.match(logs.join("\n"),/credential_setup: invalid_token_format/);
-    assert.doesNotMatch(logs.join("\n"),/secret value/);
+    assert.doesNotMatch(logs.join("\n"),/secret/);
   } finally {console.error=original;await rm(root,{recursive:true,force:true});}
 });
 
