@@ -9,8 +9,9 @@ import type { Config, JournalState } from "./types.ts";
 import { detectEnvironment, needsValidation, runEnvironmentCommands } from "./environment.ts";
 import { normalizeTaskResult, formatTaskReport, type BlockerCategory } from "./task-result.ts";
 import { setTimeout as delay } from "node:timers/promises";
+import { materializeTaskAssets, taskAssetsPrompt } from "./task-assets.ts";
 
-type Transport={post:(path:string,payload:unknown)=>Promise<any>};
+type Transport={post:(path:string,payload:unknown)=>Promise<any>;downloadAsset?:(lease:JournalState["lease"],id:string,maxBytes?:number)=>Promise<{body:Buffer;filename:string;mediaType:string;sha256:string}>};
 type ExecutionDependencies={dataRoot?:string;repositories?:RepositoryWorkspace;publisherFactory?:(context:PublicationContext)=>Publisher};
 
 export async function waitForClarification(api:Transport,lease:JournalState["lease"],params:any,signal?:AbortSignal,pollIntervalMs=3_000):Promise<{response:unknown;expired:boolean}> {
@@ -187,6 +188,22 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     state.workspace=workspace.path;state.baseline=workspace.baseline;await journal.save(state);
     if(controller.signal.aborted)throw new Error("Lease ended.");
     if(!resuming)await emitDurably(api,journal,state,"progress",{stage:"workspace_ready"});
+    const assetList=Array.isArray(snapshot.task_assets)?snapshot.task_assets:[];
+    const hasTaskAssets=assetList.length>0 || Number(snapshot.task_assets_skipped)>0 || state.materialized_assets!==undefined;
+    if(hasTaskAssets) {
+      await emitDurably(api,journal,state,"progress",{stage:"task_context_loading"});
+      const assetAPI={downloadAsset:(lease:JournalState["lease"],id:string,maxBytes?:number)=>api.downloadAsset
+        ? api.downloadAsset(lease,id,maxBytes)
+        : Promise.reject(new Error("Task asset download is unavailable."))};
+      state.materialized_assets=await materializeTaskAssets(assetAPI,state.lease,workspace.path,state.materialized_assets);
+      await journal.save(state);
+      await emitDurably(api,journal,state,"progress",{
+        stage:"task_context_ready",
+        available_count:state.materialized_assets.available.length,
+        unavailable_count:state.materialized_assets.unavailable.length,
+        skipped_count:state.materialized_assets.skipped_count
+      });
+    }
     const publicationContext={workspace:workspace.path,repository:String(snapshot.repository??""),baseBranch:String(snapshot.base_branch??""),branch:workspace.branch,baseline:workspace.baseline,gitDir:workspace.gitDir,commonDir:workspace.commonDir};
     const publisher=dependencies.publisherFactory?.(publicationContext)??new Publisher(publicationContext);
     if(state.phase!=="publish") {
@@ -206,6 +223,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       instructionsPath
         ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
         : "Project instructions:\n"+String(snapshot.instructions??""),
+      state.materialized_assets ? taskAssetsPrompt(state.materialized_assets,workspace.path) : "",
       "Task: "+String(state.lease.title??""),String(state.lease.prompt??""),
       "The executor prepares dependencies and runs these project checks after your turn: "+JSON.stringify(environment.validate)+". Do not duplicate these full checks or install dependencies unnecessarily; run targeted probes only if needed to implement the change. Return a useful summary and only validations actually performed. Set blocker=null when completed. For blocked outcomes give a precise category and reason; missing_context must include a concrete question.",
       "Do not run git add or git commit: the trusted connector creates the commit after your turn. Do not push, create a PR, merge, or deploy."

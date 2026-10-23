@@ -66,6 +66,7 @@ defmodule DevOrchestratorWeb.Router do
     post("/executor/claim", ExecutorController, :claim)
     post("/executor/renew", ExecutorController, :renew)
     post("/executor/github-token", ExecutorController, :github_token)
+    post("/executor/assets", ExecutorController, :asset)
     post("/executor/events", ExecutorController, :event)
     post("/executor/reconcile", ExecutorController, :reconcile)
     post("/executor/clarifications/request", ExecutorController, :clarification_request)

@@ -18,7 +18,7 @@ test("executor setup commands use the published connector release", async () => 
     "utf8",
   );
 
-  assert.equal(manifest.version, "0.1.3");
+  assert.equal(manifest.version, "0.1.4");
   assert.match(dashboard, new RegExp(`dev-orchestrator-connector@${manifest.version}`));
 });
 

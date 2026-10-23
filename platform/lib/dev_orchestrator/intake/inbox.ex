@@ -148,7 +148,12 @@ defmodule DevOrchestrator.Intake.Inbox do
              %{"id" => row["event"]["issue_id"]}
            ) do
       if is_map(issue),
-        do: Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue)),
+        do:
+          Enum.each(projects, fn project ->
+            DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+              "linear_connection_id" => connection["id"]
+            })
+          end),
         else:
           Enum.each(
             projects,

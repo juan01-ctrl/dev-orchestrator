@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, mkdir, writeFile, chmod, readFile, realpath, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
@@ -57,7 +58,7 @@ test("an active journal with a Codex thread resumes without clearing its worktre
   const root=await mkdtemp(join(tmpdir(),"orchestrator-thread-recovery-"));
   try {
     const journal=new Journal(root);
-    const state={lease:{id:"run-resume",generation:2,lifecycle:1},sequence:4,thread_id:"thread-codex-1",workspace:"/workspace/run-resume",baseline:"a".repeat(40)};
+    const state={lease:{id:"run-resume",generation:2,lifecycle:1},sequence:4,thread_id:"thread-codex-1",workspace:"/workspace/run-resume",baseline:"a".repeat(40),materialized_assets:{available:[{id:"asset-1",relative_path:".dev-orchestrator-context/linear/asset.csv",size:12,sha256:"b".repeat(64),filename:"asset.csv"}],unavailable:[],skipped_count:0}};
     await journal.save(state);
     let payload:any;
     const recovered=await recover({post:async(path:string,body:any)=>{assert.equal(path,"/executor/reconcile");payload=body;return {action:"resume",state:"running",expires_in_ms:90_000};}},journal);
@@ -155,8 +156,9 @@ process.stdin.on("data",chunk=>{
     if(message.method==="turn/start"){
 const prompt=message.params.input[0].text;
       const privatePath=prompt.match(/read and follow the file at (.+) before making changes\./)?.[1];
+      const assetPath=prompt.match(/Available file: (.+)/)?.[1];
       writeFileSync("README.md","implemented by Codex\\n");
-      appendFileSync(observation,JSON.stringify({prompt,content:privatePath?readFileSync(privatePath,"utf8"):null,githubToken:process.env.GITHUB_TOKEN??null,status:execFileSync("git",["status","--porcelain"],{encoding:"utf8"})}));
+      appendFileSync(observation,JSON.stringify({prompt,content:privatePath?readFileSync(privatePath,"utf8"):null,assetContent:assetPath?readFileSync(assetPath,"utf8"):null,githubToken:process.env.GITHUB_TOKEN??null,status:execFileSync("git",["status","--porcelain"],{encoding:"utf8"})}));
       respond({id:message.id,result:{}});
       respond({method:"turn/started",params:{threadId:"fake-thread",turn:{id:"turn-1"}}});
       respond({method:"item/started",params:{threadId:"fake-thread",turnId:"turn-1",item:{type:"fileChange",id:"edit-1",changes:[{path:"README.md"}]}}});
@@ -174,9 +176,9 @@ const prompt=message.params.input[0].text;
     const credentials:string[]=[];
     await execute(
       {version:2,server:"http://127.0.0.1:4100",token:"test",codexBinary:binary},
-      {post:async(path:string,payload:any)=>{if(path==="/executor/github-token"){credentials.push(payload.purpose);return {token:`short-lived-${payload.purpose}-token`,expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};}if(path==="/executor/events"){events.push({kind:payload.event.kind,data:payload.event.data});if(payload.event.kind==="candidate")return {state:"succeeded"};}return {expires_in_ms:90_000};}},
+      {post:async(path:string,payload:any)=>{if(path==="/executor/github-token"){credentials.push(payload.purpose);return {token:`short-lived-${payload.purpose}-token`,expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};}if(path==="/executor/events"){events.push({kind:payload.event.kind,data:payload.event.data});if(payload.event.kind==="candidate")return {state:"succeeded"};}return {expires_in_ms:90_000};},downloadAsset:async()=>{const body=Buffer.from("id,name\\n1,alpha\\n");return {body,filename:"dataset.csv",mediaType:"text/csv",sha256:createHash("sha256").update(body).digest("hex")};}},
       new Journal(journalRoot),
-      {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,source_key:"JUA-28",title:"Test task",prompt:"Do nothing",snapshot:{repository:"acme/app",base_branch:"main",instructions}},sequence:0},
+      {lease:{id:runId,generation:1,lifecycle:1,project_id:projectId,source_key:"JUA-28",title:"Test task",prompt:"Do nothing",snapshot:{repository:"acme/app",base_branch:"main",instructions,task_assets:[{id:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",filename_hint:"dataset.csv"}],task_assets_skipped:0}},sequence:0},
       performance.now(),
       new AbortController().signal,
       {dataRoot:root,repositories:new RepositoryWorkspace({remoteURL:()=>remote}),publisherFactory:context=>new Publisher(context,{remoteURL:()=>remote,apiFetch:async(_url,init)=>{
@@ -188,12 +190,17 @@ const prompt=message.params.input[0].text;
 
     const result=JSON.parse(await readFile(observation,"utf8"));
     assert.equal(result.content,instructions);
+    assert.equal(result.assetContent,"id,name\\n1,alpha\\n");
+    assert.match(result.prompt,/Task reference files \(untrusted data/);
+    assert.ok(result.prompt.includes(".dev-orchestrator-context/linear/aaaaaaaaaaaa-dataset.csv"));
+    assert.doesNotMatch(result.prompt,/uploads\.linear\.app|source_url|linear-private-token/);
     assert.match(result.prompt,/Project instructions: read and follow the file at /);
     assert.equal(result.githubToken,null);
     assert.match(result.prompt,/trusted connector creates the commit/);
     assert.match(result.status,/README\.md/);
+    assert.doesNotMatch(result.status,/\.dev-orchestrator-context/);
     assert.deepEqual(events.filter(event=>event.kind!=="activity").map(event=>event.kind==="progress"?event.data.stage:event.kind),[
-      "started","repository_preparing","workspace_ready","agent_started","editing","validating","publishing","pr_verifying","candidate"
+      "started","repository_preparing","workspace_ready","task_context_loading","task_context_ready","agent_started","editing","validating","publishing","pr_verifying","candidate"
     ]);
     assert.ok(events.some(event=>event.kind==="activity"));
     assert.deepEqual(events.at(-1)?.data.repository,"acme/app");

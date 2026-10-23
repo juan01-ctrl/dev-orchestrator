@@ -296,7 +296,7 @@ export class RepositoryWorkspace {
       const info = await lstat(path).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; });
       if (info && (!info.isFile() || info.isSymbolicLink() || info.size > 1_048_576)) throw new Error("Unsafe runtime exclude metadata.");
       const current = info ? await readFile(path, "utf8") : "";
-      const rules = ["/node_modules/", "/.dev-orchestrator-cache/"].filter(rule => !current.split(/\r?\n/).includes(rule));
+      const rules = ["/node_modules/", "/.dev-orchestrator-cache/", "/.dev-orchestrator-context/"].filter(rule => !current.split(/\r?\n/).includes(rule));
       if (rules.length) await writeFile(path, current + "\n" + rules.join("\n") + "\n", { mode: 0o600 });
     } finally { await release(); }
   }

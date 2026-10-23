@@ -42,7 +42,7 @@ defmodule DevOrchestrator.Intake.Reconciler do
           :ok
         else
           case fetch_pages(connection, token, projects, teams, cursor, 0) do
-            :ok -> revalidate_tracked(token, projects)
+            :ok -> revalidate_tracked(token, projects, connection["id"])
             error -> error
           end
         end
@@ -100,7 +100,11 @@ defmodule DevOrchestrator.Intake.Reconciler do
       {:ok, %{"data" => %{"issues" => %{"nodes" => issues, "pageInfo" => page_info}}}}
       when is_list(issues) ->
         Enum.each(issues, fn issue ->
-          Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
+          Enum.each(projects, fn project ->
+            DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+              "linear_connection_id" => connection["id"]
+            })
+          end)
         end)
 
         next_updated = Enum.reduce(issues, cursor.updated_at, &later(&1["updatedAt"], &2))
@@ -132,7 +136,7 @@ defmodule DevOrchestrator.Intake.Reconciler do
     end
   end
 
-  defp revalidate_tracked(token, projects) do
+  defp revalidate_tracked(token, projects, connection_id) do
     tracked =
       Store.rows(
         "SELECT l.project_id,l.issue_id FROM linear_issue_lifecycles l JOIN projects p ON p.id=l.project_id WHERE l.is_active=true AND l.project_id=ANY($1::text[]) ORDER BY l.updated_at LIMIT 100",
@@ -153,7 +157,11 @@ defmodule DevOrchestrator.Intake.Reconciler do
           projects_by_id = Map.new(projects, &{&1["id"], &1})
 
           Enum.each(issues, fn issue ->
-            Enum.each(projects, &DevOrchestrator.Runs.Lifecycle.apply_issue(&1, issue))
+            Enum.each(projects, fn project ->
+              DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+                "linear_connection_id" => connection_id
+              })
+            end)
           end)
 
           Enum.each(tracked, fn item ->

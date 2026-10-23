@@ -17,7 +17,7 @@ defmodule DevOrchestrator.Runs do
            scope.organization_id
          ]) do
       nil -> {:error, :not_found}
-      run -> {:ok, run}
+      run -> {:ok, Map.delete(run, "source_context")}
     end
   end
 
@@ -251,6 +251,11 @@ defmodule DevOrchestrator.Runs do
                 "execution_deadline_at_ms",
                 FailureBudget.deadline(run, System.system_time(:millisecond))
               )
+              |> Map.put("task_assets", lease_assets(run["source_context"]))
+              |> Map.put(
+                "task_assets_skipped",
+                get_in(run, ["source_context", "skipped_count"]) || 0
+              )
 
             leased =
               Store.one(
@@ -323,6 +328,9 @@ defmodule DevOrchestrator.Runs do
       _ -> {:error, :github_installation_required}
     end
   end
+
+  def asset(executor, lease, asset_id),
+    do: DevOrchestrator.Runs.Assets.fetch(executor, lease, asset_id)
 
   def github_token(_, _, _), do: {:error, :invalid_purpose}
 
@@ -773,4 +781,15 @@ defmodule DevOrchestrator.Runs do
         ~w(id project_id title prompt source_key issue_url generation lifecycle snapshot sequence)
       )
       |> Map.put("expires_in_ms", 90_000)
+
+  defp lease_assets(source_context) when is_map(source_context) do
+    source_context
+    |> Map.get("assets", [])
+    |> Enum.filter(fn asset ->
+      is_map(asset) and is_binary(asset["id"]) and is_binary(asset["filename_hint"])
+    end)
+    |> Enum.map(&Map.take(&1, ["id", "filename_hint"]))
+  end
+
+  defp lease_assets(_), do: []
 end

@@ -3,7 +3,7 @@ defmodule DevOrchestrator.Runs.Lifecycle do
 
   @active_run_states ~w(queued leased running waiting_for_executor)
 
-  def apply_issue(project, issue) do
+  def apply_issue(project, issue, source_context \\ %{}) do
     issue_id = issue["id"]
     state = get_in(issue, ["state", "name"])
 
@@ -18,7 +18,7 @@ defmodule DevOrchestrator.Runs.Lifecycle do
           )
 
         if eligible? do
-          activate(project, issue, lifecycle)
+          activate(project, issue, lifecycle, source_context)
         else
           deactivate(project, issue, lifecycle)
         end
@@ -51,38 +51,45 @@ defmodule DevOrchestrator.Runs.Lifecycle do
     end)
   end
 
-  defp activate(project, issue, nil) do
-    create_activation(project, issue, 1)
+  defp activate(project, issue, nil, source_context) do
+    create_activation(project, issue, 1, source_context)
   end
 
-  defp activate(project, issue, %{"is_active" => true} = previous) do
+  defp activate(project, issue, %{"is_active" => true} = previous, source_context) do
     Store.exec(
       "UPDATE linear_issue_lifecycles SET issue_state=$3,updated_at=now() WHERE project_id=$1 AND issue_id=$2",
       [project["id"], issue["id"], get_in(issue, ["state", "name"])]
     )
 
-    {title, prompt} = task_context(issue)
+    {title, prompt, private_context} = task_context(issue, source_context)
 
     Store.exec(
-      "UPDATE runs SET title=$3,prompt=$4,issue_url=$5,updated_at=now() WHERE id=$1 AND organization_id=$2 AND state='queued' AND executor_id IS NULL AND sequence=0",
-      [previous["run_id"], project["organization_id"], title, prompt, issue["url"]]
+      "UPDATE runs SET title=$3,prompt=$4,issue_url=$5,source_context=$6,updated_at=now() WHERE id=$1 AND organization_id=$2 AND state='queued' AND executor_id IS NULL AND sequence=0",
+      [
+        previous["run_id"],
+        project["organization_id"],
+        title,
+        prompt,
+        issue["url"],
+        private_context
+      ]
     )
 
     %{result: :unchanged, activation: previous["activation"]}
   end
 
-  defp activate(project, issue, previous) do
-    create_activation(project, issue, previous["activation"] + 1)
+  defp activate(project, issue, previous, source_context) do
+    create_activation(project, issue, previous["activation"] + 1, source_context)
   end
 
-  defp create_activation(project, issue, activation) do
-    {title, prompt} = task_context(issue)
+  defp create_activation(project, issue, activation, source_context) do
+    {title, prompt, private_context} = task_context(issue, source_context)
 
     source_key = "linear:" <> issue["id"] <> ":" <> Integer.to_string(activation)
 
     run =
       Store.one(
-        "INSERT INTO runs(id,organization_id,project_id,source_key,title,prompt,issue_url) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(project_id,source_key) DO UPDATE SET source_key=excluded.source_key RETURNING *",
+        "INSERT INTO runs(id,organization_id,project_id,source_key,title,prompt,issue_url,source_context) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(project_id,source_key) DO UPDATE SET source_key=excluded.source_key RETURNING *",
         [
           Store.id(),
           project["organization_id"],
@@ -90,7 +97,8 @@ defmodule DevOrchestrator.Runs.Lifecycle do
           source_key,
           title,
           prompt,
-          issue["url"]
+          issue["url"],
+          private_context
         ]
       )
 
@@ -106,18 +114,30 @@ defmodule DevOrchestrator.Runs.Lifecycle do
     }
   end
 
-  defp task_context(issue) do
-    prompt =
-      String.slice((issue["title"] || "") <> "\n\n" <> (issue["description"] || ""), 0, 8_000)
+  defp task_context(issue, source_context) do
+    title_text = DevOrchestrator.Intake.LinearAssets.sanitize_description(issue["title"] || "")
+
+    description =
+      DevOrchestrator.Intake.LinearAssets.sanitize_description(issue["description"] || "")
+
+    prompt = String.slice(title_text <> "\n\n" <> description, 0, 8_000)
 
     title =
       String.slice(
-        (issue["identifier"] || "Issue") <> " — " <> (issue["title"] || "Development task"),
+        (issue["identifier"] || "Issue") <> " — " <> (title_text || "Development task"),
         0,
         240
       )
 
-    {title, prompt}
+    extracted = DevOrchestrator.Intake.LinearAssets.extract(issue["description"] || "")
+
+    private_context = %{
+      "linear_connection_id" => source_context["linear_connection_id"],
+      "assets" => extracted.assets,
+      "skipped_count" => extracted.skipped_count
+    }
+
+    {title, prompt, private_context}
   end
 
   defp deactivate(_project, _issue, nil), do: %{result: :unchanged, activation: 0}
