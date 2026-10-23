@@ -19,4 +19,24 @@ defmodule DevOrchestratorWeb.AssetsTest do
     refute conn.resp_body =~ "OpenAI"
     refute conn.resp_body =~ "WORKFLOW.md"
   end
+
+  test "serves the clipboard interaction used by executor command buttons" do
+    conn = Plug.Test.conn(:get, "/assets/app.js")
+    conn = Endpoint.call(conn, Endpoint.init([]))
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "navigator.clipboard.writeText"
+    assert conn.resp_body =~ "Copy failed"
+  end
+
+  test "serves the activity stream auto-follow hook and bounded scroll styles" do
+    js = Endpoint.call(Plug.Test.conn(:get, "/assets/app.js"), Endpoint.init([]))
+    css = Endpoint.call(Plug.Test.conn(:get, "/assets/app.css"), Endpoint.init([]))
+
+    assert js.status == 200
+    assert js.resp_body =~ "ActivityStream"
+    assert js.resp_body =~ "scrollToLatest"
+    assert css.status == 200
+    assert css.resp_body =~ ".activity-stream{max-height:26rem;overflow-y:auto"
+  end
 end
