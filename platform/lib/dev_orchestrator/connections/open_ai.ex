@@ -21,7 +21,7 @@ defmodule DevOrchestrator.Connections.OpenAI do
                {"model", model},
                {"prompt", "Transcribe this Spanish-language task request accurately."},
                {"file",
-                {File.stream!(path),
+                {File.stream!(path, 65_536),
                  filename: "audio." <> filetype,
                  content_type: audio_content_type(filetype),
                  size: stat.size}}
