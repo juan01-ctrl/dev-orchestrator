@@ -11,10 +11,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   def accept(event) when is_map(event) do
     with {:ok, project, slack_connection} <- route(event),
          true <- valid_event?(event) do
-      ids = event["file_ids"]
-
-      audio_valid =
-        is_list(ids) and length(ids) == 1 and is_binary(hd(ids)) and hd(ids) != ""
+      input = DevOrchestrator.Intake.Slack.task_file_id(event)
 
       linear_ready =
         is_map(Connections.for_project(project["organization_id"], project["id"], "linear")) and
@@ -22,12 +19,12 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
       error_category =
         cond do
-          not audio_valid -> "audio_required"
+          match?({:error, _}, input) -> "input_required"
           not linear_ready -> "linear_not_configured"
           true -> nil
         end
 
-      file_id = if error_category, do: nil, else: hd(ids)
+      file_id = if error_category, do: nil, else: elem(input, 1)
       id = Store.id()
 
       case Store.one(
@@ -343,7 +340,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
            logged_step("slack_progress_message", fn -> post_progress(token, row) end),
          :ok <- save_progress(row, progress_ts),
          {:ok, {transcript, draft}} <-
-           logged_step("audio_transcription_and_task_draft", fn -> build_task(row, token) end),
+           logged_step("task_draft", fn -> build_task(row, token) end),
          :ok <- persist_draft(row, transcript, draft),
          {:ok, message_ts} <-
            logged_step("slack_draft_message", fn -> post_draft(token, row, draft) end),
@@ -389,33 +386,35 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
   defp build_task(%{"error_category" => "audio_required"}, _token), do: {:error, :audio_required}
 
+  defp build_task(%{"error_category" => "input_required"}, _token), do: {:error, :input_required}
+
   defp build_task(%{"error_category" => "linear_not_configured"}, _token),
     do: {:error, :linear_not_configured}
 
   defp build_task(row, token) do
     with :ok <- if(OpenAI.configured?(), do: :ok, else: {:error, :not_configured}),
          {:ok, project} <- project_for(row),
-         {:ok, {transcript, draft}} <-
-           Slack.with_audio(token, row["file_id"], fn path, metadata ->
-             with {:ok, transcript} <-
-                    logged_step("openai_transcription", fn ->
-                      OpenAI.transcribe(path, metadata.type)
-                    end),
-                  {:ok, raw_draft} <-
-                    logged_step("openai_task_draft", fn ->
-                      OpenAI.structure_task(%{
-                        transcript: transcript,
-                        message: row["message_text"] || "",
-                        project_name: project["name"],
-                        project_instructions: project["instructions"]
-                      })
-                    end),
-                  {:ok, draft} <- TaskDraft.normalize(raw_draft) do
-               {:ok, {transcript, draft}}
-             end
-           end) do
+         {:ok, transcript} <- transcribe_audio(row, token),
+         {:ok, raw_draft} <-
+           logged_step("openai_task_draft", fn ->
+             OpenAI.structure_task(%{
+               transcript: transcript,
+               message: row["message_text"] || "",
+               project_name: project["name"],
+               project_instructions: project["instructions"]
+             })
+           end),
+         {:ok, draft} <- TaskDraft.normalize(raw_draft) do
       {:ok, {transcript, draft}}
     end
+  end
+
+  defp transcribe_audio(%{"file_id" => nil}, _token), do: {:ok, nil}
+
+  defp transcribe_audio(row, token) do
+    Slack.with_audio(token, row["file_id"], fn path, metadata ->
+      logged_step("openai_transcription", fn -> OpenAI.transcribe(path, metadata.type) end)
+    end)
   end
 
   defp post_progress(token, row) do
@@ -423,7 +422,11 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       channel: row["channel_id"],
       thread_ts: row["thread_ts"],
       client_msg_id: deterministic_uuid(row["id"] <> ":progress"),
-      text: "Transcribing and preparing a task draft…",
+      text:
+        if(row["file_id"],
+          do: "Transcribing and preparing a task draft…",
+          else: "Preparing a task draft…"
+        ),
       unfurl_links: false,
       unfurl_media: false
     })
@@ -474,17 +477,17 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   defp handle_processing_error(row, category) do
     category = safe_category(category)
 
-    if row["error_category"] == "audio_required" do
+    if row["error_category"] in ["audio_required", "input_required"] do
       with {:ok, token} <- slack_token(row),
            {:ok, ts} <- progress_ts(row) do
         case Slack.update_message(token, %{
                channel: row["channel_id"],
                ts: ts,
                text:
-                 "Please mention me with exactly one supported audio file attached (MP3, MP4, M4A, WAV, or WebM; up to 25 MB).",
+                 "Please mention me with a task description in text, or attach exactly one supported audio file (MP3, MP4, M4A, WAV, or WebM; up to 25 MB).",
                blocks: []
              }) do
-          :ok -> mark_failed(row, "audio_required")
+          :ok -> mark_failed(row, row["error_category"])
           {:error, error} -> retry_or_fail(row, safe_category(error))
         end
       else
@@ -628,11 +631,11 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       "Connect Linear and configure this project's team and project before requesting a task. No issue was created."
 
   defp processing_failure_text(_row, "not_configured"),
-    do: "Audio task intake is not configured with OpenAI yet. No Linear issue was created."
+    do: "Task intake is not configured with OpenAI yet. No Linear issue was created."
 
   defp processing_failure_text(_row, _category),
     do:
-      "I couldn't prepare this task draft. Please check the audio and project connection, then try again."
+      "I couldn't prepare this task draft. Please check the text or audio and project connection, then try again."
 
   defp transient?(category), do: category in ["provider_unavailable", "provider_rate_limit"]
 
@@ -649,6 +652,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
               :unsupported_file,
               :invalid_file_url,
               :audio_required,
+              :input_required,
               :not_found,
               :state_changed
             ],

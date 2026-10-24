@@ -64,14 +64,14 @@ defmodule DevOrchestrator.SlackIntakeTest do
     assert Store.one("SELECT count(*) AS count FROM slack_task_drafts")["count"] == 1
   end
 
-  test "mentions with zero or multiple attachments persist a safe usage reply state", _context do
+  test "empty mentions and multiple attachments persist a safe usage reply state", _context do
     base = %{
       "workspace_id" => "T1",
       "channel_id" => "C1",
       "requester_slack_user_id" => "U1",
       "message_ts" => "1.2",
       "thread_ts" => "1.2",
-      "text" => "Make a task"
+      "text" => " \n"
     }
 
     assert {:ok, :created} =
@@ -83,7 +83,7 @@ defmodule DevOrchestrator.SlackIntakeTest do
              )
 
     assert Store.one(
-             "SELECT count(*) AS count FROM slack_task_drafts WHERE error_category='audio_required'"
+             "SELECT count(*) AS count FROM slack_task_drafts WHERE error_category='input_required'"
            )["count"] == 2
   end
 
@@ -118,13 +118,17 @@ defmodule DevOrchestrator.SlackIntakeTest do
            }
   end
 
-  test "a mention without audio posts the usage reply and releases the processing claim",
+  test "an empty mention posts the usage reply and releases the processing claim",
        context do
     previous_transport = Application.get_env(:dev_orchestrator, :provider_transport)
     on_exit(fn -> restore_provider_transport(previous_transport) end)
     store_token(context.scope, context.slack_connection_id, "slack-token")
 
-    body = Jason.encode!(slack_payload("Ev-usage-reply", "T1", "C1", []))
+    body =
+      slack_payload("Ev-usage-reply", "T1", "C1", [])
+      |> put_in(["event", "text"], "<@BOT>")
+      |> Jason.encode!()
+
     assert {:ok, :accepted} = Inbox.accept_slack(body)
     assert :processed = Inbox.process_one()
 
@@ -147,10 +151,98 @@ defmodule DevOrchestrator.SlackIntakeTest do
              "SELECT state,error_category,claimed_at,slack_progress_message_ts FROM slack_task_drafts WHERE event_id='Ev-usage-reply'"
            ) == %{
              "state" => "failed",
-             "error_category" => "audio_required",
+             "error_category" => "input_required",
              "claimed_at" => nil,
              "slack_progress_message_ts" => "2.3"
            }
+  end
+
+  test "text mentions prepare a draft without file access or transcription and require confirmation",
+       context do
+    previous_transport = Application.get_env(:dev_orchestrator, :provider_transport)
+    previous_openai = Application.get_env(:dev_orchestrator, :openai)
+
+    on_exit(fn ->
+      restore_provider_transport(previous_transport)
+
+      if previous_openai,
+        do: Application.put_env(:dev_orchestrator, :openai, previous_openai),
+        else: Application.delete_env(:dev_orchestrator, :openai)
+    end)
+
+    Application.put_env(:dev_orchestrator, :openai, api_key: "openai-test-token")
+    store_token(context.scope, context.slack_connection_id, "slack-token")
+
+    draft = %{
+      "title" => "Corregir el botón de guardar",
+      "context" => "El botón no guarda los cambios.",
+      "objective" => "Guardar los cambios del formulario.",
+      "scope" => ["Corregir el guardado."],
+      "acceptance_criteria" => ["Los cambios se guardan."],
+      "constraints_or_open_questions" => []
+    }
+
+    payload =
+      slack_payload("Ev-text", "T1", "C1", [])
+      |> put_in(["event", "text"], "<@BOT> Corregir el botón de guardar")
+      |> Jason.encode!()
+
+    assert {:ok, :accepted} = Inbox.accept_slack(payload)
+    assert {:ok, :duplicate} = Inbox.accept_slack(payload)
+    assert :processed = Inbox.process_one()
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      send(self(), {:text_intake_request, opts[:url], opts[:json]})
+
+      case opts[:url] do
+        "https://slack.com/api/chat.postMessage" ->
+          ts = if opts[:json][:blocks], do: "2.4", else: "2.3"
+          {:ok, %{status: 200, body: %{"ok" => true, "ts" => ts}}}
+
+        "https://api.openai.com/v1/responses" ->
+          {:ok,
+           %{
+             status: 200,
+             body: %{
+               "output" => [
+                 %{"content" => [%{"type" => "output_text", "text" => Jason.encode!(draft)}]}
+               ]
+             }
+           }}
+      end
+    end)
+
+    assert :processed = SlackDrafts.process_one()
+
+    assert_receive {:text_intake_request, "https://slack.com/api/chat.postMessage", progress}
+    assert progress[:text] == "Preparing a task draft…"
+    assert progress[:thread_ts] == "1.2"
+
+    assert_receive {:text_intake_request, "https://api.openai.com/v1/responses", request}
+
+    assert %{"message" => "Corregir el botón de guardar", "transcript" => ""} =
+             Jason.decode!(request[:input])
+
+    assert_receive {:text_intake_request, "https://slack.com/api/chat.postMessage", proposed}
+    assert proposed[:thread_ts] == "1.2"
+    refute_receive {:text_intake_request, _, _}
+
+    row = Store.one("SELECT * FROM slack_task_drafts WHERE event_id='Ev-text'")
+    assert row["state"] == "awaiting_confirmation"
+    assert row["file_id"] == nil
+    assert row["transcript"] == nil
+    assert row["linear_issue_id"] == nil
+    assert row["task_draft"] == draft
+    assert row["error_category"] == nil
+
+    assert {:error, :forbidden} =
+             SlackDrafts.confirm(action(row["id"], "U-other") |> Map.put("message_ts", "2.4"))
+
+    assert {:ok, :queued} =
+             SlackDrafts.confirm(action(row["id"], "U1") |> Map.put("message_ts", "2.4"))
+
+    assert Store.one("SELECT state FROM slack_task_drafts WHERE id=$1", [row["id"]])["state"] ==
+             "creating"
   end
 
   test "a Slack transport exception after retries marks the draft failed instead of leaving it claimed",

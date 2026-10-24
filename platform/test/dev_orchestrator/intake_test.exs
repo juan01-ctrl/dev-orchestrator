@@ -76,6 +76,28 @@ defmodule DevOrchestrator.IntakeTest do
              DevOrchestrator.Intake.Slack.normalize_event(%{"type" => "url_verification"})
   end
 
+  test "Slack task input accepts text without files and retains the audio path with optional text" do
+    alias DevOrchestrator.Intake.Slack
+
+    assert {:ok, nil} =
+             Slack.task_file_id(%{"text" => "Corregir el botón de guardar", "file_ids" => []})
+
+    assert {:ok, "F1"} = Slack.task_file_id(%{"text" => "", "file_ids" => ["F1"]})
+
+    assert {:ok, "F1"} =
+             Slack.task_file_id(%{"text" => "Para el formulario", "file_ids" => ["F1"]})
+
+    for event <- [
+          %{"text" => " \n\t", "file_ids" => []},
+          %{"text" => nil, "file_ids" => []},
+          %{"text" => "A task", "file_ids" => ["F1", "F2"]},
+          %{"text" => "A task", "file_ids" => [""]},
+          %{"text" => "A task", "file_ids" => nil}
+        ] do
+      assert {:error, :input_required} = Slack.task_file_id(event)
+    end
+  end
+
   test "direct-message mentions are outside the initial task intake scope" do
     assert {:ignore, :unsupported_channel} =
              DevOrchestrator.Intake.Slack.normalize_event(%{

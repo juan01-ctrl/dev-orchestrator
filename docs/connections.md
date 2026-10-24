@@ -69,9 +69,11 @@ project rules. Only non-archived channels where the bot is already a member are
 listed. If an existing connection was installed before channel scopes were
 added, reconnect Slack to grant them. A Slack channel is bound to exactly one
 platform project within its workspace. To create a task, mention the bot in that
-channel and attach one hosted audio file (`mp3`, `mp4`, `mpeg`, `mpga`, `m4a`,
-`wav` or `webm`, at most 25 MB). The bot transcribes and proposes a structured
-task in the thread; only the original requester can create it in the configured
+channel with a text description, for example `@TestApp Fix the save button`,
+or attach one hosted audio file (`mp3`, `mp4`, `mpeg`, `mpga`, `m4a`,
+`wav` or `webm`, at most 25 MB) with optional text context. Text-only requests
+skip transcription. The bot proposes a structured task in the thread;
+only the original requester can create it in the configured
 Linear project, and the confirmation expires after 24 hours. No Linear issue or
 execution is created before confirmation. Revoking a local connection immediately
 prevents the platform from using it; revoke the app at the provider as well to

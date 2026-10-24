@@ -307,6 +307,44 @@ defmodule DevOrchestrator.ProviderTest do
              })
   end
 
+  test "OpenAI text task structuring preserves the full bounded Slack message without a transcript" do
+    Application.put_env(:dev_orchestrator, :openai, api_key: "openai-test-token")
+    message = String.duplicate("x", 3_989) <> "end-of-task"
+
+    draft = %{
+      "title" => "A task",
+      "context" => "Context",
+      "objective" => "Goal",
+      "scope" => [],
+      "acceptance_criteria" => [],
+      "constraints_or_open_questions" => []
+    }
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      send(self(), {:task_input, opts[:url], Jason.decode!(opts[:json][:input])})
+
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "output" => [
+             %{"content" => [%{"type" => "output_text", "text" => Jason.encode!(draft)}]}
+           ]
+         }
+       }}
+    end)
+
+    assert {:ok, ^draft} =
+             DevOrchestrator.Connections.OpenAI.structure_task(%{
+               message: message,
+               transcript: nil
+             })
+
+    assert_receive {:task_input, "https://api.openai.com/v1/responses", input}
+    assert input["message"] == message
+    assert input["transcript"] == ""
+  end
+
   test "Linear issue creation validates its project and chooses the first configured active state" do
     draft = %{
       "title" => "Export report",

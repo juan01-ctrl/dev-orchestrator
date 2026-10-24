@@ -42,13 +42,15 @@ connect them from a project, invite the Slack bot, and authorize a local executo
    preserved work, and no automatic fourth attempt after server restart.
 9. Disconnect the executor and revoke a connection; verify truthful actionable states.
 
-### Slack audio task intake
+### Slack text and audio task intake
 
 Run only after an owner authorizes Slack reconnection and OpenAI API use for the
 designated test project. Use a non-production channel and Linear project.
 
 1. Mention the bot with one short Spanish audio file and optional text; verify the
    bot replies in the same thread and produces no Linear issue yet.
+   Repeat with a text-only mention; verify the same review flow without file
+   downloads or a transcription request.
 2. Review the title, context, objective, scope, acceptance criteria, and open
    questions; verify the complete proposed fields are visible and the raw
    transcript is not appended to the eventual Linear issue.
@@ -58,7 +60,8 @@ designated test project. Use a non-production channel and Linear project.
    team/project and the configured active state.
 5. Verify the existing signed Linear webhook creates exactly one run and the
    existing connector flow begins. Replay the event and button interaction.
-6. Try no attachment, multiple files, an unsupported file, and an expired draft;
+6. Try an empty mention without attachments, multiple files, an unsupported file,
+   and an expired draft;
    verify safe thread responses and no unexpected Linear mutation.
 
 Slack app reinstallation, provider calls, Render secret changes, and deployment

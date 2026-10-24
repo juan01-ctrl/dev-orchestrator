@@ -41,6 +41,15 @@ defmodule DevOrchestrator.Intake.Slack do
   def normalize_event(%{"type" => "event_callback"}), do: {:ignore, :unsupported_event}
   def normalize_event(_), do: {:ignore, :unsupported_event}
 
+  def task_file_id(%{"file_ids" => [id]}) when is_binary(id) and id != "",
+    do: {:ok, id}
+
+  def task_file_id(%{"file_ids" => [], "text" => text}) when is_binary(text) do
+    if String.trim(text) == "", do: {:error, :input_required}, else: {:ok, nil}
+  end
+
+  def task_file_id(_), do: {:error, :input_required}
+
   defp valid_string?(value), do: is_binary(value) and value != "" and byte_size(value) <= 200
 
   defp normalize_text(text) when is_binary(text) do
