@@ -107,7 +107,8 @@ export class RepositoryWorkspace {
     const cacheKey=createHash("sha256").update(repository).digest("hex").slice(0,16);
     const cache=join(repositories,`${projectId}-${cacheKey}`);
     const workspace=join(workspaces,`${lease.id}-${lease.lifecycle}`);
-    const branch=`task/${lease.id}`;
+    const branch=lease.snapshot?.task_branch??`task/${lease.id}`;
+    if(!validBranch(branch) || ![ `task/${lease.id}`, `task/${lease.id}/attempt-${lease.lifecycle}`, `task-attempts/${lease.id}/attempt-${lease.lifecycle}` ].includes(branch))throw new Error("Task branch does not match its attempt.");
     const remote=this.remoteURL(repository);
     const release=await acquireLock(cache+".lock");
     let stage="credential_setup";
@@ -130,8 +131,11 @@ export class RepositoryWorkspace {
         }
         stage="base_fetch";
         await git(["--git-dir",cache,"-c","core.hooksPath=/dev/null","fetch","--prune","origin",`+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`]);
-        const baseline=(await git(["--git-dir",cache,"rev-parse",`refs/remotes/origin/${baseBranch}^{commit}`])).output;
+        const fetchedBaseline=(await git(["--git-dir",cache,"rev-parse",`refs/remotes/origin/${baseBranch}^{commit}`])).output;
+        const baseline=typeof lease.snapshot?.resume_baseline==="string"?lease.snapshot.resume_baseline:fetchedBaseline;
         if(!validSHA(baseline))throw new Error("Selected base branch does not resolve to a commit.");
+        const resumeHead=lease.snapshot?.resume_head;
+        if(resumeHead!==undefined && (typeof resumeHead!=="string" || !validSHA(resumeHead)))throw new Error("Invalid repair head.");
 
         stage="workspace_inspection";
         const existingWorkspace=await lstat(workspace).catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;throw error;});
@@ -147,12 +151,25 @@ export class RepositoryWorkspace {
             ? await readMarker(workspace,cache)
             : await this.recoverIncompleteWorktree(git,workspace,cache,lease,repository,baseBranch,baseline,branch,credential,gitdir);
           if(marker.run!==lease.id || marker.lifecycle!==lease.lifecycle || marker.project!==projectId || marker.repository!==repository || marker.base_branch!==baseBranch || marker.branch!==branch || !validSHA(marker.baseline))throw new Error("Existing task worktree identity does not match this lease.");
+          if(resumeHead && ((await git(["-C",workspace,"rev-parse","HEAD"])).output!==resumeHead || (await git(["-C",workspace,"status","--porcelain"])).output))throw new Error("Repair workspace differs from the approved PR head; preserve and review local work.");
+          const terminalPath=join(gitdir,"terminal.json");
+          const terminal=await lstat(terminalPath).catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return undefined;throw error;});
+          if(terminal) {
+            if(!terminal.isFile() || terminal.isSymbolicLink())throw new Error("Unsafe task terminal marker.");
+            await unlink(terminalPath);
+          }
           return {path:workspace,branch,baseline:marker.baseline,gitDir:gitdir,commonDir:cache};
         }
 
         stage="workspace_creation";
-        await git(["--git-dir",cache,"worktree","add","--force","--detach",workspace,baseline]);
-        await git(["-C",workspace,"-c","core.hooksPath=/dev/null","switch","-C",branch,"--ignore-other-worktrees",baseline]);
+        let checkout=baseline;
+        if(resumeHead) {
+          await git(["--git-dir",cache,"fetch","origin",`refs/heads/${branch}`]);
+          checkout=(await git(["--git-dir",cache,"rev-parse","FETCH_HEAD"])).output;
+          if(checkout!==resumeHead)throw new Error("Remote repair head changed; refusing to overwrite it.");
+        }
+        await git(["--git-dir",cache,"worktree","add","--force","--detach",workspace,checkout]);
+        await git(["-C",workspace,"-c","core.hooksPath=/dev/null","switch","-C",branch,"--ignore-other-worktrees",checkout]);
         await git(["-C",workspace,"config","user.name",credential.author_name]);
         await git(["-C",workspace,"config","user.email",credential.author_email]);
         await git(["-C",workspace,"config","core.hooksPath","/dev/null"]);
@@ -268,7 +285,7 @@ export class RepositoryWorkspace {
     } finally {await release();}
   }
 
-  async markTerminal(workspace:string,outcome:"success"|"failure"):Promise<void> {
+  async markTerminal(workspace:string,outcome:"success"|"failure",reviewPending=false):Promise<void> {
     const canonical=await realpath(workspace);
     if(!isAbsolute(workspace) || canonical!==resolve(workspace))throw new Error("Task worktree path must be canonical.");
     const cache=await workspaceCache(canonical);
@@ -282,7 +299,7 @@ export class RepositoryWorkspace {
       if(previous.outcome!==outcome)throw new Error("Task terminal outcome changed unexpectedly.");
       return;
     }
-    await writeFile(terminalPath,JSON.stringify({outcome,recorded_at:Date.now()}),{mode:0o600,flag:"wx"});
+    await writeFile(terminalPath,JSON.stringify({outcome,recorded_at:Date.now(),...(reviewPending?{review_until:Date.now()+7*24*60*60_000}:{})}),{mode:0o600,flag:"wx"});
   }
 
   async excludeRuntimeFiles(workspace: string): Promise<void> {
@@ -321,9 +338,10 @@ export class RepositoryWorkspace {
         const terminalPath=join(await worktreeGitDirectory(workspace,cache),"terminal.json");
         const terminalInfo=await lstat(terminalPath);
         if(!terminalInfo.isFile() || terminalInfo.isSymbolicLink() || (terminalInfo.mode&0o077)!==0)continue;
-        const terminal=JSON.parse(await readFile(terminalPath,"utf8")) as {outcome?:unknown;recorded_at?:unknown};
+        const terminal=JSON.parse(await readFile(terminalPath,"utf8")) as {outcome?:unknown;recorded_at?:unknown;review_until?:unknown};
         if(!["success","failure"].includes(String(terminal.outcome)) || typeof terminal.recorded_at!=="number")continue;
         const retention=terminal.outcome==="success"?24*60*60_000:7*24*60*60_000;
+        if(typeof terminal.review_until==="number" && now<terminal.review_until)continue;
         if(now-terminal.recorded_at<retention)continue;
         if(await realpath(cache)!==cache)continue;
         const status=await this.runCommand(

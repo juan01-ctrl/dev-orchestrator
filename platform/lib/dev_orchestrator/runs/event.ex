@@ -32,8 +32,9 @@ defmodule DevOrchestrator.Runs.Event do
     repo = get_in(run, ["snapshot", "repository"])
 
     valid =
-      is_binary(repo) and allowed["repository"] == repo and
-        allowed["branch"] == "task/" <> run["id"] and
+      get_in(run, ["snapshot", "mode"]) != "investigate" and
+        is_binary(repo) and allowed["repository"] == repo and
+        allowed["branch"] == (get_in(run, ["snapshot", "task_branch"]) || "task/" <> run["id"]) and
         allowed["base_branch"] == get_in(run, ["snapshot", "base_branch"]) and
         is_binary(allowed["commit"]) and
         Regex.match?(~r/\A(?:[a-f0-9]{40}|[a-f0-9]{64})\z/, allowed["commit"]) and
@@ -44,6 +45,12 @@ defmodule DevOrchestrator.Runs.Event do
         )
 
     if valid, do: {:ok, Map.merge(allowed, report(data))}, else: {:error, :invalid_event}
+  end
+
+  def sanitize(run, "report", data) when is_map(data) do
+    if get_in(run, ["snapshot", "mode"]) == "investigate",
+      do: {:ok, report(data)},
+      else: {:error, :invalid_event}
   end
 
   def sanitize(run, kind, data) when kind in ~w(failure blocked) and is_map(data) do
@@ -59,7 +66,12 @@ defmodule DevOrchestrator.Runs.Event do
 
     safe =
       Map.merge(
-        %{"category" => category, "fingerprint" => fingerprint, "occurrences" => occurrences},
+        %{
+          "category" => category,
+          "fingerprint" => fingerprint,
+          "occurrences" => occurrences,
+          "resumable" => data["resumable"] == true
+        },
         report(data)
       )
 

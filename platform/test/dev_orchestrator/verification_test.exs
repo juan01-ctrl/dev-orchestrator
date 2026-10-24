@@ -40,6 +40,10 @@ defmodule DevOrchestrator.VerificationTest do
     assert verified["summary"] == result["summary"]
     assert verified["validation"] == result["validation"]
 
+    assert {:ok, empty} = Verification.validate_pr(run, result, Map.put(pr, "changed_files", 0))
+    assert empty["outcome"] == "pr_no_diff"
+    assert empty["summary"] =~ "no net file changes"
+
     assert {:error, :unverified_pr} =
              Verification.validate_pr(
                run,

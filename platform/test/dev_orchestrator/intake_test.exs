@@ -1,5 +1,21 @@
 defmodule DevOrchestrator.IntakeTest do
   use ExUnit.Case, async: true
+
+  test "text revisions retain an accepted audio correction until it is incorporated" do
+    alias DevOrchestrator.Intake.SlackDrafts
+
+    assert SlackDrafts.revision_file_id(%{"state" => "received", "file_id" => "F-AUDIO"}, nil) ==
+             "F-AUDIO"
+
+    assert SlackDrafts.revision_file_id(%{"state" => "processing", "file_id" => "F-AUDIO"}, nil) ==
+             "F-AUDIO"
+
+    assert SlackDrafts.revision_file_id(
+             %{"state" => "awaiting_confirmation", "file_id" => "F-AUDIO"},
+             nil
+           ) == nil
+  end
+
   alias DevOrchestrator.Intake.Inbox
 
   test "generic Linear deliveries normalize to minimal provider-independent routing data" do
@@ -127,6 +143,13 @@ defmodule DevOrchestrator.IntakeTest do
 
     assert {:ok, action} = DevOrchestrator.Connections.Slack.normalize_action(payload)
     assert action["draft_id"] == "draft-id"
+    assert action["revision"] == 1
+
+    assert {:ok, %{"draft_id" => "draft-id", "revision" => 3}} =
+             DevOrchestrator.Connections.Slack.normalize_action(
+               put_in(payload, ["actions", Access.at(0), "value"], "draft-id:3")
+             )
+
     refute inspect(action) =~ "response_url"
     refute inspect(action) =~ "secret.invalid"
 

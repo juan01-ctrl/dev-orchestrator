@@ -79,9 +79,13 @@ reconnect.
 When Codex requests missing context, the connector persists one bounded clarification
 per run generation and turns the app-server response into a durable owner response.
 The run page accepts answers; Slack receives a link to that page when the project has
-a configured report channel. The executor waits up to 19 minutes while renewing its
-lease. The request expires after 20 minutes; an unanswered request becomes a blocked
-run, not a silent success. Secret-input questions are rejected, and question/answer
+a configured report channel. Legacy connectors wait up to 19 minutes while renewing
+their lease. Workflow-v2 connectors checkpoint the conversation, stop the session,
+and release the slot into `awaiting_input`. Questions expire after 24 hours;
+authorized answers queue the same attempt on its original connector under a new
+generation. A 90-second handoff window lets the previous process stop before
+another slot resumes it. Waiting does not consume the saved execution budget.
+Expiry cancels the run while preserving local work. Secret-input questions are rejected, and question/answer
 text is bounded and redacted before storage. Codex responses use the app-server's
 question-keyed `answers` object; see the [official response schema](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/schema/json/ToolRequestUserInputResponse.json).
 

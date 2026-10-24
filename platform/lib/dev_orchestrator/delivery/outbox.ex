@@ -27,7 +27,10 @@ defmodule DevOrchestrator.Delivery.Outbox do
           run["project_id"],
           run["id"],
           run["lifecycle"],
-          provider <> ":" <> state,
+          provider <>
+            ":" <>
+            state <>
+            if((run["repair_count"] || 0) > 0, do: ":repair#{run["repair_count"]}", else: ""),
           payload
         ]
       )

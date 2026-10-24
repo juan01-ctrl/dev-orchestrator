@@ -249,7 +249,9 @@ defmodule DevOrchestrator.IntakeAuthorizationTest do
              })
 
     assert :ok = Runs.retry(scope, run_id)
-    assert {:ok, retried} = Runs.claim(executor)
+
+    assert {:ok, retried} =
+             Runs.claim(Map.put(executor, "capabilities", %{"workflow_version" => 2}))
 
     assert Enum.map(retried["snapshot"]["task_assets"], & &1["filename_hint"]) ==
              ["pasted.png", "attached.png"]

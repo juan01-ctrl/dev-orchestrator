@@ -89,6 +89,13 @@ defmodule DevOrchestratorWeb.WebhookController do
           text: "This task draft has expired. Please send a new request."
         })
 
+      {:error, :stale_draft} ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text:
+            "This draft was revised. Please review and confirm the latest proposal in this thread."
+        })
+
       _ ->
         json(conn, %{text: "This task button is no longer available."})
     end
@@ -107,6 +114,12 @@ defmodule DevOrchestratorWeb.WebhookController do
 
       {:error, :expired} ->
         json(conn, %{response_type: "ephemeral", text: "This task draft has expired."})
+
+      {:error, :stale_draft} ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text: "This draft was revised. Please use the latest proposal in this thread."
+        })
 
       _ ->
         json(conn, %{text: "This task button is no longer available."})

@@ -6,7 +6,7 @@ import { withGitHubCredential, validateGitHubCredential } from "./git-credential
 import type { GitHubCredential } from "./types.ts";
 import { validBranch, validRepository } from "./workspace.ts";
 
-export type PublicationContext={workspace:string;repository:string;baseBranch:string;branch:string;baseline:string;gitDir:string;commonDir:string};
+export type PublicationContext={workspace:string;repository:string;baseBranch:string;branch:string;baseline:string;gitDir:string;commonDir:string;previousHead?:string;previousPullRequest?:string};
 type Dependencies={runCommand?:typeof command;apiFetch?:typeof fetch;remoteURL?:(repository:string)=>string};
 const validSHA=(sha:string)=>/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha);
 
@@ -17,7 +17,10 @@ export class Publisher {
   private readonly remoteURL:(repository:string)=>string;
 
   constructor(context:PublicationContext,dependencies:Dependencies={}) {
-    if(!validRepository(context.repository) || !validBranch(context.branch) || !validBranch(context.baseBranch) || context.branch===context.baseBranch || !context.branch.startsWith("task/") || !validSHA(context.baseline) || !context.gitDir || !context.commonDir)throw new Error("Invalid publication context.");
+    if(context.previousHead!==undefined && !validSHA(context.previousHead))throw new Error("Invalid previous delivery head.");
+    const previousPrefix=`https://github.com/${context.repository}/pull/`;
+    if(context.previousPullRequest!==undefined && (!context.previousHead || !context.previousPullRequest.startsWith(previousPrefix) || !/^[0-9]+$/.test(context.previousPullRequest.slice(previousPrefix.length))))throw new Error("Invalid previous pull request.");
+    if(!validRepository(context.repository) || !validBranch(context.branch) || !validBranch(context.baseBranch) || context.branch===context.baseBranch || !(context.branch.startsWith("task/") || context.branch.startsWith("task-attempts/")) || !validSHA(context.baseline) || !context.gitDir || !context.commonDir)throw new Error("Invalid publication context.");
     this.context=context;
     this.runCommand=dependencies.runCommand??command;
     this.apiFetch=dependencies.apiFetch??fetch;
@@ -29,7 +32,7 @@ export class Publisher {
       const uncommitted=await git(["diff","--no-ext-diff","--no-textconv","--quiet",sha,"--"],true);
       const untracked=await git(["ls-files","--others","--exclude-standard"]);
       if(uncommitted.code!==0 || untracked.output)throw new Error("Uncommitted changes remain. The trusted connector must commit the task before publication.");
-      const diff=await git(["diff","--no-ext-diff","--no-textconv","--quiet",this.context.baseline,sha,"--"],true);
+      const diff=await git(["diff","--no-ext-diff","--no-textconv","--quiet",this.context.previousHead??this.context.baseline,sha,"--"],true);
       return {changed:diff.code===1,commit:sha};
     },signal);
   }
@@ -70,9 +73,14 @@ export class Publisher {
     const status=await this.status(signal);
     if(!status.changed)throw new Error("No committed changes to publish.");
     return this.trusted(async(git,sha,temp,objects)=>{
+      const previousPath=this.context.previousPullRequest?`/repos/${this.context.repository}/pulls/${this.context.previousPullRequest.split("/").at(-1)}`:undefined;
+      if(previousPath) {
+        const previous=await this.githubRequest("GET",previousPath,credential,undefined,signal);
+        if(!previous.ok || !(this.matchesPullRequest(previous.body,this.context.previousHead!) || this.matchesPullRequest(previous.body,sha)))throw new Error("The existing pull request changed or closed; repair publication stopped.");
+      }
       await withGitHubCredential(temp,credential,env=>git(["push","--no-verify",this.remoteURL(this.context.repository),`${sha}:refs/heads/${this.context.branch}`],false,{...env,GIT_OBJECT_DIRECTORY:objects}));
-      let pr=await this.findOpenPullRequest(credential,signal);
-      if(!pr) {
+      let pr=previousPath?(await this.githubRequest("GET",previousPath,credential,undefined,signal)).body:await this.findOpenPullRequest(credential,signal);
+      if(!pr && !previousPath) {
         const [owner]=this.context.repository.split("/");
         const created=await this.githubRequest("POST",`/repos/${this.context.repository}/pulls`,credential,{
           title,

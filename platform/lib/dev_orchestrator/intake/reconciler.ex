@@ -76,10 +76,21 @@ defmodule DevOrchestrator.Intake.Reconciler do
     case Store.one("SELECT * FROM linear_reconciliation_cursors WHERE connection_id=$1", [
            connection_id
          ]) do
-      nil -> {:ok, %{updated_at: nil, page: nil}}
-      row -> {:ok, %{updated_at: row["updated_at_cursor"], page: row["page_cursor"]}}
+      nil ->
+        {:ok, %{updated_at: nil, page: nil, watermark: nil}}
+
+      row ->
+        {:ok, cursor(row)}
     end
   end
+
+  @doc false
+  def cursor(row),
+    do: %{
+      updated_at: parse_datetime(row["updated_at_cursor"]),
+      page: row["page_cursor"],
+      watermark: parse_datetime(row["scan_updated_at_cursor"])
+    }
 
   defp fetch_pages(_connection, _token, _projects, _teams, _cursor, page_count)
        when page_count >= @max_pages_per_tick,
@@ -99,39 +110,74 @@ defmodule DevOrchestrator.Intake.Reconciler do
     case Linear.query(token, query, %{"after" => cursor.page, "filter" => filter}) do
       {:ok, %{"data" => %{"issues" => %{"nodes" => issues, "pageInfo" => page_info}}}}
       when is_list(issues) ->
-        Enum.each(issues, fn issue ->
-          Enum.each(projects, fn project ->
-            DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
-              "linear_connection_id" => connection["id"]
-            })
+        application =
+          DevOrchestrator.Intake.Batch.apply(issues, fn issue ->
+            case DevOrchestrator.Intake.Batch.apply(projects, fn project ->
+                   DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+                     "linear_connection_id" => connection["id"]
+                   })
+                 end) do
+              :ok -> {:ok, :applied}
+              error -> error
+            end
           end)
-        end)
 
-        next_updated = Enum.reduce(issues, cursor.updated_at, &later(&1["updatedAt"], &2))
-        next_page = if page_info["hasNextPage"], do: page_info["endCursor"], else: nil
+        if application == :ok do
+          next_updated =
+            Enum.reduce(
+              issues,
+              cursor.watermark || cursor.updated_at,
+              &later(&1["updatedAt"], &2)
+            )
 
-        saved_updated = if next_page, do: cursor.updated_at, else: next_updated
-        save_cursor(connection["id"], saved_updated, next_page, nil)
+          next_page = if page_info["hasNextPage"], do: page_info["endCursor"], else: nil
 
-        if next_page do
-          fetch_pages(
-            connection,
-            token,
-            projects,
-            teams,
-            %{updated_at: cursor.updated_at, page: next_page},
-            page_count + 1
+          saved_updated = if next_page, do: cursor.updated_at, else: next_updated
+
+          save_cursor(
+            connection["id"],
+            saved_updated,
+            next_page,
+            nil,
+            if(next_page, do: next_updated)
           )
+
+          if next_page do
+            fetch_pages(
+              connection,
+              token,
+              projects,
+              teams,
+              %{updated_at: cursor.updated_at, page: next_page, watermark: next_updated},
+              page_count + 1
+            )
+          else
+            :ok
+          end
         else
-          :ok
+          application
         end
 
       {:error, reason} ->
-        save_cursor(connection["id"], cursor.updated_at, cursor.page, error_category(reason))
+        save_cursor(
+          connection["id"],
+          cursor.updated_at,
+          cursor.page,
+          error_category(reason),
+          cursor.watermark
+        )
+
         {:error, reason}
 
       _ ->
-        save_cursor(connection["id"], cursor.updated_at, cursor.page, "provider_rejected")
+        save_cursor(
+          connection["id"],
+          cursor.updated_at,
+          cursor.page,
+          "provider_rejected",
+          cursor.watermark
+        )
+
         {:error, :provider_rejected}
     end
   end
@@ -156,24 +202,31 @@ defmodule DevOrchestrator.Intake.Reconciler do
           visible = MapSet.new(issues, & &1["id"])
           projects_by_id = Map.new(projects, &{&1["id"], &1})
 
-          Enum.each(issues, fn issue ->
-            Enum.each(projects, fn project ->
-              DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
-                "linear_connection_id" => connection_id
-              })
+          application =
+            DevOrchestrator.Intake.Batch.apply(issues, fn issue ->
+              case DevOrchestrator.Intake.Batch.apply(projects, fn project ->
+                     DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+                       "linear_connection_id" => connection_id
+                     })
+                   end) do
+                :ok -> {:ok, :applied}
+                error -> error
+              end
             end)
-          end)
 
-          Enum.each(tracked, fn item ->
-            if not MapSet.member?(visible, item["issue_id"]) do
-              DevOrchestrator.Runs.Lifecycle.remove_issue(
-                projects_by_id[item["project_id"]],
-                item["issue_id"]
-              )
-            end
-          end)
+          removals =
+            DevOrchestrator.Intake.Batch.apply(tracked, fn item ->
+              if not MapSet.member?(visible, item["issue_id"]) do
+                DevOrchestrator.Runs.Lifecycle.remove_issue(
+                  projects_by_id[item["project_id"]],
+                  item["issue_id"]
+                )
+              else
+                {:ok, :unchanged}
+              end
+            end)
 
-          :ok
+          if application == :ok, do: removals, else: application
 
         {:error, _} = error ->
           error
@@ -195,6 +248,7 @@ defmodule DevOrchestrator.Intake.Reconciler do
   end
 
   defp parse_datetime(%DateTime{} = value), do: value
+  defp parse_datetime(%NaiveDateTime{} = value), do: DateTime.from_naive!(value, "Etc/UTC")
 
   defp parse_datetime(value) when is_binary(value) do
     case DateTime.from_iso8601(value) do
@@ -205,10 +259,10 @@ defmodule DevOrchestrator.Intake.Reconciler do
 
   defp parse_datetime(_), do: nil
 
-  defp save_cursor(connection_id, updated_at, page, error) do
+  defp save_cursor(connection_id, updated_at, page, error, watermark) do
     Store.exec(
-      "INSERT INTO linear_reconciliation_cursors(connection_id,updated_at_cursor,page_cursor,last_success_at,last_error_category) VALUES($1,$2,$3,CASE WHEN $4::text IS NULL THEN now() ELSE NULL END,$4) ON CONFLICT(connection_id) DO UPDATE SET updated_at_cursor=EXCLUDED.updated_at_cursor,page_cursor=EXCLUDED.page_cursor,last_success_at=CASE WHEN $4::text IS NULL THEN now() ELSE linear_reconciliation_cursors.last_success_at END,last_error_category=$4",
-      [connection_id, updated_at, page, error]
+      "INSERT INTO linear_reconciliation_cursors(connection_id,updated_at_cursor,page_cursor,last_success_at,last_error_category,scan_updated_at_cursor) VALUES($1,$2,$3,CASE WHEN $4::text IS NULL THEN now() ELSE NULL END,$4,$5) ON CONFLICT(connection_id) DO UPDATE SET updated_at_cursor=EXCLUDED.updated_at_cursor,page_cursor=EXCLUDED.page_cursor,last_success_at=CASE WHEN $4::text IS NULL THEN now() ELSE linear_reconciliation_cursors.last_success_at END,last_error_category=$4,scan_updated_at_cursor=$5",
+      [connection_id, updated_at, page, error, watermark]
     )
   end
 

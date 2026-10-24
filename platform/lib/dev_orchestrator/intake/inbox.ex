@@ -190,12 +190,10 @@ defmodule DevOrchestrator.Intake.Inbox do
       )
 
     if row["event"]["action"] == "remove" do
-      Enum.each(
+      DevOrchestrator.Intake.Batch.apply(
         projects,
         &DevOrchestrator.Runs.Lifecycle.remove_issue(&1, row["event"]["issue_id"])
-      )
-
-      true
+      ) == :ok
     else
       process_visible_issue(row, connection, projects)
     end
@@ -209,20 +207,21 @@ defmodule DevOrchestrator.Intake.Inbox do
              "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id} attachments{nodes{url}}}}",
              %{"id" => row["event"]["issue_id"]}
            ) do
-      if is_map(issue),
-        do:
-          Enum.each(projects, fn project ->
-            DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
-              "linear_connection_id" => connection["id"]
-            })
-          end),
-        else:
-          Enum.each(
-            projects,
-            &DevOrchestrator.Runs.Lifecycle.remove_issue(&1, row["event"]["issue_id"])
-          )
+      result =
+        if is_map(issue),
+          do:
+            DevOrchestrator.Intake.Batch.apply(projects, fn project ->
+              DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+                "linear_connection_id" => connection["id"]
+              })
+            end),
+          else:
+            DevOrchestrator.Intake.Batch.apply(
+              projects,
+              &DevOrchestrator.Runs.Lifecycle.remove_issue(&1, row["event"]["issue_id"])
+            )
 
-      true
+      result == :ok
     else
       _ -> false
     end

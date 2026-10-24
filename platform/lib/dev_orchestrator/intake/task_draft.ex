@@ -37,7 +37,9 @@ defmodule DevOrchestrator.Intake.TaskDraft do
     |> IO.iodata_to_binary()
   end
 
-  def to_slack_blocks(draft, draft_id) do
+  def to_slack_blocks(draft, draft_id, revision \\ 1) do
+    value = draft_id <> ":" <> Integer.to_string(revision)
+
     [
       section("Proposed Linear task\nTitle: " <> slack_text(draft["title"])),
       section("Context\n" <> slack_text(draft["context"])),
@@ -54,14 +56,14 @@ defmodule DevOrchestrator.Intake.TaskDraft do
             type: "button",
             action_id: "create_linear_task",
             text: %{type: "plain_text", text: "Create in Linear"},
-            value: draft_id,
+            value: value,
             style: "primary"
           },
           %{
             type: "button",
             action_id: "cancel_linear_task",
             text: %{type: "plain_text", text: "Cancel"},
-            value: draft_id
+            value: value
           }
         ]
       }

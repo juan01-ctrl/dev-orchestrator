@@ -68,7 +68,8 @@ The connector keeps a bare repository cache and creates an isolated task worktre
 inside its managed data directory. It requests short-lived, repository-scoped
 GitHub App credentials for checkout and publication; credentials stay out of
 Codex, the connector journal and Git remotes. No local `gh` authentication or Git
-author setup is required. One connector runs one task at a time; multiple
+author setup is required. A connector defaults to one task slot and supports up to ten
+with `DEV_ORCHESTRATOR_SLOTS`; multiple
 connectors allow parallel work subject to per-project limits. Its dedicated Codex
 subprocess does not attach to desktop chats.
 

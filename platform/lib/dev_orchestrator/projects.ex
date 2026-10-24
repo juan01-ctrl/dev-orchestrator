@@ -45,7 +45,11 @@ defmodule DevOrchestrator.Projects do
   end
 
   def update_project(%Scope{} = scope, id, attrs) do
-    with {:ok, project} <- get_project(scope, id) do
+    with {:ok, project} <- get_project(scope, id),
+         true <-
+           not Map.has_key?(attrs, "pr_feedback_enabled") or
+             attrs["pr_feedback_enabled"] in [true, "true"] == project.data["pr_feedback_enabled"] or
+             DevOrchestrator.Accounts.owner?(scope) do
       try do
         Store.transaction(fn -> update_project_transaction(scope, id, attrs, project) end)
         |> case do
@@ -58,6 +62,9 @@ defmodule DevOrchestrator.Projects do
             do: {:error, :slack_channel_already_bound},
             else: reraise(error, __STACKTRACE__)
       end
+    else
+      false -> {:error, :forbidden}
+      error -> error
     end
   end
 
@@ -68,7 +75,7 @@ defmodule DevOrchestrator.Projects do
           project.data,
           Map.take(
             attrs,
-            ~w(name repository base_branch instructions concurrency model linear_team linear_project active_states review_state slack_channel)
+            ~w(name repository base_branch instructions concurrency model linear_team linear_project active_states review_state slack_channel pr_feedback_enabled)
           )
         )
         |> Map.put("slack_workspace_id", workspace_id)
@@ -76,7 +83,7 @@ defmodule DevOrchestrator.Projects do
       if valid?(merged) do
         row =
           Store.one(
-            "UPDATE projects SET name=$3,repository=$4,base_branch=$5,instructions=$6,concurrency=$7,version=version+1,model=$8,linear_team=$9,linear_project=$10,review_state=$11,slack_channel=$12,active_states=$13,slack_workspace_id=$14 WHERE id=$1 AND organization_id=$2 RETURNING *",
+            "UPDATE projects SET name=$3,repository=$4,base_branch=$5,instructions=$6,concurrency=$7,version=version+1,model=$8,linear_team=$9,linear_project=$10,review_state=$11,slack_channel=$12,active_states=$13,slack_workspace_id=$14,pr_feedback_enabled=$15 WHERE id=$1 AND organization_id=$2 RETURNING *",
             [
               id,
               scope.organization_id,
@@ -91,7 +98,8 @@ defmodule DevOrchestrator.Projects do
               merged["review_state"] || "In Review",
               blank(merged["slack_channel"]),
               merged["active_states"] || ["Todo", "In Progress"],
-              workspace_id
+              workspace_id,
+              merged["pr_feedback_enabled"] in [true, "true"]
             ]
           )
 
@@ -134,7 +142,7 @@ defmodule DevOrchestrator.Projects do
     do:
       Map.take(
         project.data,
-        ~w(id name repository base_branch instructions concurrency version model linear_team linear_project active_states review_state slack_workspace_id slack_channel)
+        ~w(id name repository base_branch instructions concurrency version model linear_team linear_project active_states review_state slack_workspace_id slack_channel pr_feedback_enabled)
       )
 
   def validate_instructions(filename, bytes) when is_binary(filename) and is_binary(bytes) do

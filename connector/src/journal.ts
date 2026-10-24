@@ -1,13 +1,16 @@
 import { mkdir, open, readFile, rename, unlink, lstat } from "node:fs/promises";
-import { join, isAbsolute } from "node:path";
+import { join, isAbsolute, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { JournalState } from "./types.ts";
+import type { JournalState, Lease } from "./types.ts";
 
 export class Journal {
   readonly root: string;
-  constructor(root: string) {
+  readonly continuationRoot: string;
+  constructor(root: string, continuationRoot = join(root,"continuations")) {
     if (!isAbsolute(root)) throw new Error("Journal directory must be absolute.");
+    if (!isAbsolute(continuationRoot)) throw new Error("Continuation directory must be absolute.");
     this.root = root;
+    this.continuationRoot = continuationRoot;
   }
   async load(): Promise<JournalState | null> {
     try {
@@ -32,6 +35,38 @@ export class Journal {
   }
   async clear(): Promise<void> {
     await unlink(join(this.root,"active.json")).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; });
+  }
+
+  private continuationPath(lease: Lease): string {
+    if(!/^[a-zA-Z0-9_-]{1,100}$/.test(lease.id) || !Number.isInteger(lease.lifecycle) || lease.lifecycle<1)throw new Error("Invalid continuation identity.");
+    return join(this.continuationRoot,`${lease.id}-${lease.lifecycle}`,"active.json");
+  }
+
+  async preserveCompleted(state: JournalState): Promise<void> {
+    const checkpoint=new Journal(dirname(this.continuationPath(state.lease)));
+    await checkpoint.save(state);
+  }
+
+  async park(state: JournalState): Promise<void> {
+    await this.preserveCompleted(state);
+    await this.clear();
+  }
+
+  async resumeContinuation(lease: Lease): Promise<JournalState|null> {
+    const path=this.continuationPath(lease);
+    const info=await lstat(path).catch(error=>{if((error as NodeJS.ErrnoException).code==="ENOENT")return null;throw error;});
+    if(!info)return null;
+    if(!info.isFile() || info.isSymbolicLink() || (info.mode&0o077))throw new Error("Unsafe continuation checkpoint.");
+    const state=JSON.parse(await readFile(path,"utf8")) as JournalState;
+    if(state.lease?.id!==lease.id || state.lease.lifecycle!==lease.lifecycle || state.lease.generation>=lease.generation || !state.thread_id || !state.workspace || !state.baseline)throw new Error("Continuation does not match the preserved attempt.");
+    if(state.lease.snapshot?.task_branch!==lease.snapshot?.task_branch)throw new Error("Continuation branch changed.");
+    state.lease=lease;state.sequence=lease.sequence??0;state.phase="implement";
+    state.deadline_at=typeof lease.snapshot?.execution_deadline_at_ms==="number"?lease.snapshot.execution_deadline_at_ms:Date.now()+20*60_000;
+    state.attempts=0;state.publication_attempts=0;state.verification_attempts=0;
+    state.continuation_started=false;
+    delete state.pending_event;delete state.result;delete state.candidate;delete state.repair_context;
+    await this.save(state);await unlink(path);
+    return state;
   }
   async archive(reason: string): Promise<void> {
     const state=await this.load();

@@ -1,7 +1,7 @@
 defmodule DevOrchestrator.Runs.Lifecycle do
   alias DevOrchestrator.Store
 
-  @active_run_states ~w(queued leased running waiting_for_executor)
+  @active_run_states ~w(queued leased running waiting_for_executor awaiting_input)
 
   def apply_issue(project, issue, source_context \\ %{}) do
     issue_id = issue["id"]

@@ -107,7 +107,7 @@ uses Resend's HTTPS API, so SMTP port restrictions do not apply.
    `/connections/slack/callback`. Configure Slack Events API and Interactivity
    Request URLs as `/api/v1/webhooks/slack`, subscribe to `app_mention`, and
    enable `app_mentions:read` and `files:read`. Configure Linear's webhook endpoint as
-   `/api/v1/webhooks/linear/CONNECTION_ID` for each authorized connection, with
+   `/api/v1/webhooks/linear` for the connected workspace, with
    the matching signing secret in `LINEAR_WEBHOOK_SECRET`.
 7. Open the Render service URL, register the owner account, verify email, then
    connect provider accounts and pair a local executor using that public URL.
@@ -119,6 +119,11 @@ GitHub PEM. Render only prompts for `sync: false` values on initial Blueprint
 creation; add or rotate them later in the service's Environment page.
 
 ## Backup and recovery
+
+Before deploying workflow reliability changes, follow the additive migration and
+connector upgrade checklist in [workflow operations](workflow-operations.md).
+Connector 0.2.0 must be built/published before using the new dashboard's `npx` commands;
+changing a version in source does not publish an npm release.
 
 Back up PostgreSQL and the connection-encryption key separately. Restoring only
 the database cannot decrypt connection credentials without the original key.

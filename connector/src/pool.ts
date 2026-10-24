@@ -13,6 +13,7 @@ export function slotCapacity(value = process.env.DEV_ORCHESTRATOR_SLOTS): number
 
 export async function runSlots(capacity: number, signal: AbortSignal, worker: (slot: number, signal: AbortSignal) => Promise<void>): Promise<void> {
   if (!Number.isInteger(capacity) || capacity < 1 || capacity > 10) throw new Error("Executor capacity must be from 1 to 10.");
+  if(signal.aborted)return;
   const controller = new AbortController();
   const stop = () => controller.abort();
   signal.addEventListener("abort", stop, { once: true });

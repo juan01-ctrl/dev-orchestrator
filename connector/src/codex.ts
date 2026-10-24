@@ -42,8 +42,8 @@ export class CodexSession {
     this.session.on("notification", message => this.inspectCommand(message));
   }
 
-  static start(binary: string, workspace: string, allowedHosts?: string[]): CodexSession {
-    const session = AppServerSession.open({ binary, cwd: workspace, allowedHosts });
+  static start(binary: string, workspace: string, allowedHosts?: string[], readOnly = false): CodexSession {
+    const session = AppServerSession.open({ binary, cwd: workspace, allowedHosts, readOnly });
     return new CodexSession(session.child, workspace, session);
   }
 
@@ -57,7 +57,7 @@ export class CodexSession {
     const allowedHosts = new Set<string>(Array.isArray(policy?.network?.allowed_hosts) ? policy.network.allowed_hosts.filter((host: unknown): host is string => typeof host === "string").map((host: string) => host.toLowerCase()) : []);
     this.session.configureRequestHandlers({
       authorizeCommand: params => authorizeCommand(workspace, [...allowedHosts], params),
-      authorizeFileChange: params => authorizeFileChange(workspace, params),
+      authorizeFileChange: params => policy?.mode !== "investigate" && authorizeFileChange(workspace, params),
       ...(recovery.onUserInput ? { requestUserInput: params => recovery.onUserInput?.(params) } : {})
     });
     const threadOptions = { cwd: workspace, approvalPolicy: "never", permissions: "dev-orchestrator", model: selectedModel };

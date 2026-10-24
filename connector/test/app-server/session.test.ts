@@ -11,6 +11,14 @@ test("agent permission profile can inspect but cannot modify shared Git metadata
   assert.doesNotMatch(permissions, /"\.git"="write"/);
 });
 
+test("investigation grants read-only project and instruction access", () => {
+  const args=buildAppServerArgs([],true);
+  const permissions=args.find(argument=>argument.includes("permissions.dev-orchestrator.filesystem"));
+  assert.ok(permissions);
+  assert.doesNotMatch(permissions,/="write"/);
+  assert.match(permissions,/"read"/);
+});
+
 function child(outcome: "completed" | "blocked" = "completed") {
   return spawn(process.execPath, ["--input-type=module", "-e", `
     import readline from 'node:readline';

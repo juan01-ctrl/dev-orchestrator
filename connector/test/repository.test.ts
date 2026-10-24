@@ -14,6 +14,25 @@ const lease=(id:string, lifecycle=1, repository="acme/app", base_branch="main")=
 });
 const credential={token:"temporary-test-token",expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};
 
+test("fresh lifecycle branches preserve a pushed previous attempt and resuming preserves its head",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const firstLease=lease("22222222-2222-4222-8222-222222222222");
+    const first=await manager.prepare(f.root,{...firstLease,snapshot:{...firstLease.snapshot,task_branch:`task/${firstLease.id}/attempt-1`}},credential);
+    await writeFile(join(first.path,"first.txt"),"first attempt");
+    f.git(first.path,["add","first.txt"]);f.git(first.path,["commit","-m","first"]);
+    const head=f.git(first.path,["rev-parse","HEAD"]);
+    f.git(first.path,["push","origin",`HEAD:refs/heads/${first.branch}`]);
+    const secondLease=lease(firstLease.id,2);
+    const second=await manager.prepare(f.root,{...secondLease,snapshot:{...secondLease.snapshot,task_branch:`task/${firstLease.id}/attempt-2`}},credential);
+    assert.notEqual(first.branch,second.branch);
+    assert.equal(f.git(first.path,["rev-parse","HEAD"]),head);
+    const resumed=await manager.prepare(f.root,{...firstLease,generation:2,snapshot:{...firstLease.snapshot,task_branch:first.branch}},credential);
+    assert.equal(f.git(resumed.path,["rev-parse","HEAD"]),head);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
 async function fixture() {
   const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-repository-")));
   const source=join(root,"remote-source"),remote=join(root,"remote.git");
@@ -24,6 +43,43 @@ async function fixture() {
   git(remote,["init","--bare"]);git(source,["remote","add","origin",remote]);git(source,["push","origin","main"]);
   return {root,remote,git};
 }
+
+test("a new lifecycle does not collide with a retained legacy task ref",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const original=lease("22222222-2222-4222-8222-222222222222");
+    const legacy=await manager.prepare(f.root,original,credential);
+    f.git(legacy.path,["push","origin",`HEAD:refs/heads/${legacy.branch}`]);
+    assert.throws(()=>f.git(legacy.path,["branch",`${legacy.branch}/attempt-2`]));
+    const next={...original,lifecycle:2,snapshot:{...original.snapshot,task_branch:`task-attempts/${original.id}/attempt-2`}};
+    const prepared=await manager.prepare(f.root,next,credential);
+    assert.equal(prepared.branch,next.snapshot.task_branch);
+    assert.equal(f.git(legacy.path,["rev-parse","HEAD"]),legacy.baseline);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("PR repair checkpoints retain worktrees for the observation window and reject changed local heads",async()=>{
+  const f=await fixture();
+  try {
+    const manager=new RepositoryWorkspace({remoteURL:()=>f.remote});
+    const original=lease("22222222-2222-4222-8222-222222222222");
+    const prepared=await manager.prepare(f.root,original,credential);
+    const baseline=prepared.baseline;
+    await writeFile(join(prepared.path,"fix.txt"),"first implementation");
+    f.git(prepared.path,["add","fix.txt"]);f.git(prepared.path,["commit","-m","first"]);
+    const head=f.git(prepared.path,["rev-parse","HEAD"]);
+    await manager.markTerminal(prepared.path,"success",true);
+    assert.equal(await manager.cleanupExpired(f.root,undefined,Date.now()+25*60*60_000),0);
+    const repair={...original,generation:3,snapshot:{...original.snapshot,resume_head:head,resume_baseline:baseline}};
+    const resumed=await manager.prepare(f.root,repair,credential);
+    assert.equal(resumed.baseline,baseline);
+    assert.equal(f.git(resumed.path,["rev-parse","HEAD"]),head);
+    await writeFile(join(resumed.path,"human.txt"),"human work");
+    await assert.rejects(manager.prepare(f.root,repair,credential),/Repository preparation failed/);
+    assert.equal(await readFile(join(resumed.path,"human.txt"),"utf8"),"human work");
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
 
 test("bootstraps a managed repository cache and isolated task worktree without a local mapping",async()=>{
   const f=await fixture();

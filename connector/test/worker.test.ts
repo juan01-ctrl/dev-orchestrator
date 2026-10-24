@@ -217,6 +217,27 @@ const prompt=message.params.input[0].text;
     const gitdirPointer=(await readFile(join(worktree,".git"),"utf8")).trim().replace(/^gitdir: /,"");
     assert.equal(JSON.parse(await readFile(join(resolve(worktree,gitdirPointer),"terminal.json"),"utf8")).outcome,"success");
 
+    // A completed repair with no new edits still verifies the existing PR, rather
+    // than losing its PR identity through the generic no_changes completion.
+    const checkpoint=await new Journal(join(journalRoot,"continuations",`${runId}-1`)).load();
+    assert.ok(checkpoint?.candidate);
+    checkpoint.lease={...checkpoint.lease,generation:3,snapshot:{...checkpoint.lease.snapshot,resume_head:checkpoint.candidate.commit,resume_candidate:checkpoint.candidate}};
+    checkpoint.sequence=0;checkpoint.phase="publish";checkpoint.publication_attempts=0;checkpoint.continuation_started=false;
+    const followupEvents:string[]=[];
+    await execute({version:2,server:"http://127.0.0.1:4100",token:"test",codexBinary:binary},{post:async(path:string,payload:any)=>{
+      if(path==="/executor/github-token") {
+        assert.equal(payload.purpose,"checkout");
+        return {token:"short-lived-checkout-token",expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"test@example.test"};
+      }
+      if(path==="/executor/events") {
+        followupEvents.push(payload.event.kind);
+        if(payload.event.kind==="candidate")return {state:"succeeded"};
+      }
+      return {expires_in_ms:90_000};
+    }},new Journal(journalRoot),checkpoint,performance.now(),new AbortController().signal,{dataRoot:root,repositories:new RepositoryWorkspace({remoteURL:()=>remote}),publisherFactory:context=>new Publisher(context,{apiFetch:async()=>{throw new Error("No new PR publication expected");}})});
+    assert.equal(followupEvents.at(-1),"candidate");
+    assert.ok(!followupEvents.includes("no_changes"));
+
     const beforeMissingReference=await readFile(observation,"utf8");
     const blockedEvents:{kind:string;data:Record<string,unknown>}[]=[];
     await execute(

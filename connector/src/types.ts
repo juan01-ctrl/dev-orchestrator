@@ -15,4 +15,6 @@ export type JournalState = {
   verification_attempts?: number; publication_attempts?: number;
   repair_context?: string;
   materialized_assets?: MaterializedAssets;
+  environment_plan?: import("./environment.ts").EnvironmentPlan;
+  continuation_started?: boolean;
 };

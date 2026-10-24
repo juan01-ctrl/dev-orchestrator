@@ -106,7 +106,11 @@ defmodule DevOrchestrator.Executors do
   end
 
   def heartbeat(executor, capabilities) do
-    safe = Map.take(capabilities, ~w(protocol codex_authenticated platform active_slots capacity))
+    safe =
+      Map.take(
+        capabilities,
+        ~w(protocol codex_authenticated platform active_slots capacity workflow_version)
+      )
 
     Store.exec(
       "UPDATE executors SET last_seen_at=now(),capabilities=$2 WHERE id=$1 AND revoked_at IS NULL",

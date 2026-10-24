@@ -11,50 +11,116 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   def accept(event) when is_map(event) do
     with {:ok, project, slack_connection} <- route(event),
          true <- valid_event?(event) do
-      input = DevOrchestrator.Intake.Slack.task_file_id(event)
-
-      linear_ready =
-        is_map(Connections.for_project(project["organization_id"], project["id"], "linear")) and
-          present?(project["linear_team"]) and present?(project["linear_project"])
-
-      error_category =
-        cond do
-          match?({:error, _}, input) -> "input_required"
-          not linear_ready -> "linear_not_configured"
-          true -> nil
-        end
-
-      file_id = if error_category, do: nil, else: elem(input, 1)
-      id = Store.id()
-
-      case Store.one(
-             "INSERT INTO slack_task_drafts(id,event_id,organization_id,project_id,slack_connection_id,requester_slack_user_id,channel_id,thread_ts,file_id,message_text,error_category) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(event_id) DO NOTHING RETURNING id",
-             [
-               id,
-               event["event_id"],
-               project["organization_id"],
-               project["id"],
-               slack_connection["id"],
-               event["requester_slack_user_id"],
-               event["channel_id"],
-               event["thread_ts"],
-               file_id,
-               event["text"] || "",
-               error_category
-             ]
-           ) do
-        %{"id" => _} -> {:ok, :created}
-        nil -> {:ok, :duplicate}
+      case Store.transaction(fn -> accept_in_scope(event, project, slack_connection) end) do
+        {:ok, result} -> result
+        {:error, _} -> {:ok, :ignored}
       end
     else
-      false -> {:ok, :ignored}
-      nil -> {:ok, :ignored}
-      {:error, _} -> {:ok, :ignored}
       _ -> {:ok, :ignored}
     end
   end
 
   def accept(_), do: {:ok, :ignored}
+
+  defp accept_in_scope(event, project, slack_connection) do
+    previous =
+      if event["thread_ts"] != event["message_ts"] do
+        Store.one(
+          "SELECT *,(expires_at IS NULL OR expires_at>now()) AS revision_not_expired FROM slack_task_drafts WHERE project_id=$1 AND organization_id=$2 AND channel_id=$3 AND thread_ts=$4 ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+          [project["id"], project["organization_id"], event["channel_id"], event["thread_ts"]]
+        )
+      end
+
+    if previous do
+      revise(previous, event)
+    else
+      insert_draft(event, project, slack_connection)
+    end
+  end
+
+  defp revise(previous, event) do
+    valid_state =
+      previous["state"] in ~w(received processing awaiting_confirmation) and
+        is_map(previous["task_draft"])
+
+    not_expired = previous["revision_not_expired"] == true
+
+    with true <-
+           valid_state and not_expired and
+             previous["requester_slack_user_id"] == event["requester_slack_user_id"],
+         {:ok, file_id} <- DevOrchestrator.Intake.Slack.task_file_id(event) do
+      receipt =
+        Store.one(
+          "INSERT INTO slack_draft_inputs(event_id,draft_id) VALUES($1,$2) ON CONFLICT(event_id) DO NOTHING RETURNING event_id",
+          [event["event_id"], previous["id"]]
+        )
+
+      if receipt do
+        message =
+          if previous["message_text"] in [nil, ""],
+            do: event["text"] || "",
+            else: previous["message_text"] <> "\n\nCorrection:\n" <> (event["text"] || "")
+
+        message = String.slice(message, -4_000, 4_000)
+
+        Store.exec(
+          "UPDATE slack_task_drafts SET revision=revision+1,state='received',file_id=$2,message_text=$3,attempts=0,claimed_at=NULL,next_attempt_at=now(),error_category=NULL,updated_at=now() WHERE id=$1",
+          [previous["id"], revision_file_id(previous, file_id), message]
+        )
+
+        {:ok, :revised}
+      else
+        {:ok, :duplicate}
+      end
+    else
+      _ -> {:ok, :ignored}
+    end
+  end
+
+  @doc false
+  def revision_file_id(previous, file_id) do
+    if is_nil(file_id) and previous["state"] in ~w(received processing),
+      do: previous["file_id"],
+      else: file_id
+  end
+
+  defp insert_draft(event, project, slack_connection) do
+    input = DevOrchestrator.Intake.Slack.task_file_id(event)
+
+    linear_ready =
+      is_map(Connections.for_project(project["organization_id"], project["id"], "linear")) and
+        present?(project["linear_team"]) and present?(project["linear_project"])
+
+    error_category =
+      cond do
+        match?({:error, _}, input) -> "input_required"
+        not linear_ready -> "linear_not_configured"
+        true -> nil
+      end
+
+    file_id = if error_category, do: nil, else: elem(input, 1)
+    id = Store.id()
+
+    case Store.one(
+           "INSERT INTO slack_task_drafts(id,event_id,organization_id,project_id,slack_connection_id,requester_slack_user_id,channel_id,thread_ts,file_id,message_text,error_category) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(event_id) DO NOTHING RETURNING id",
+           [
+             id,
+             event["event_id"],
+             project["organization_id"],
+             project["id"],
+             slack_connection["id"],
+             event["requester_slack_user_id"],
+             event["channel_id"],
+             event["thread_ts"],
+             file_id,
+             event["text"] || "",
+             error_category
+           ]
+         ) do
+      %{"id" => _} -> {:ok, :created}
+      nil -> {:ok, :duplicate}
+    end
+  end
 
   def process_one do
     case claim_received() do
@@ -114,6 +180,12 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
             not action_matches?(row, action) ->
               {:error, :forbidden}
 
+            row["revision"] != Map.get(action, "revision", 1) ->
+              {:error, :stale_draft}
+
+            row["slack_message_ts"] != action["message_ts"] ->
+              {:error, :forbidden}
+
             row["state"] != "awaiting_confirmation" ->
               {:ok, :already_handled}
 
@@ -144,8 +216,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       row["slack_workspace_id"] == action["workspace_id"] and
       row["channel_id"] == action["channel_id"] and
       row["configured_channel"] == action["channel_id"] and
-      row["requester_slack_user_id"] == action["user_id"] and
-      row["slack_message_ts"] == action["message_ts"]
+      row["requester_slack_user_id"] == action["user_id"]
   end
 
   defp claim_creation do
@@ -399,6 +470,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
            logged_step("openai_task_draft", fn ->
              OpenAI.structure_task(%{
                transcript: transcript,
+               previous_draft: row["task_draft"],
                message: row["message_text"] || "",
                project_name: project["name"],
                project_instructions: project["instructions"]
@@ -409,7 +481,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     end
   end
 
-  defp transcribe_audio(%{"file_id" => nil}, _token), do: {:ok, nil}
+  defp transcribe_audio(%{"file_id" => nil} = row, _token), do: {:ok, row["transcript"]}
 
   defp transcribe_audio(row, token) do
     Slack.with_audio(token, row["file_id"], fn path, metadata ->
@@ -421,7 +493,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     Slack.post_message(token, %{
       channel: row["channel_id"],
       thread_ts: row["thread_ts"],
-      client_msg_id: deterministic_uuid(row["id"] <> ":progress"),
+      client_msg_id: deterministic_uuid(row["id"] <> ":#{row["revision"]}:progress"),
       text:
         if(row["file_id"],
           do: "Transcribing and preparing a task draft…",
@@ -436,9 +508,9 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     Slack.post_message(token, %{
       channel: row["channel_id"],
       thread_ts: row["thread_ts"],
-      client_msg_id: deterministic_uuid(row["id"] <> ":draft"),
+      client_msg_id: deterministic_uuid(row["id"] <> ":#{row["revision"]}:draft"),
       text: "Please review the proposed Linear task and confirm or cancel.",
-      blocks: TaskDraft.to_slack_blocks(draft, row["id"]),
+      blocks: TaskDraft.to_slack_blocks(draft, row["id"], row["revision"]),
       unfurl_links: false,
       unfurl_media: false
     })
@@ -446,8 +518,8 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
   defp save_progress(row, ts) do
     case Store.exec(
-           "UPDATE slack_task_drafts SET slack_progress_message_ts=$2,updated_at=now() WHERE id=$1 AND state='processing'",
-           [row["id"], ts]
+           "UPDATE slack_task_drafts SET slack_progress_message_ts=$2,updated_at=now() WHERE id=$1 AND state='processing' AND revision=$3",
+           [row["id"], ts, row["revision"]]
          ) do
       %{num_rows: 1} -> :ok
       _ -> {:error, :state_changed}
@@ -456,8 +528,8 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
   defp persist_draft(row, transcript, draft) do
     case Store.exec(
-           "UPDATE slack_task_drafts SET transcript=$2,task_draft=$3,updated_at=now() WHERE id=$1 AND state='processing'",
-           [row["id"], transcript, draft]
+           "UPDATE slack_task_drafts SET transcript=$2,task_draft=$3,updated_at=now() WHERE id=$1 AND state='processing' AND revision=$4",
+           [row["id"], transcript, draft, row["revision"]]
          ) do
       %{num_rows: 1} -> :ok
       _ -> {:error, :state_changed}
@@ -466,13 +538,15 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
   defp await_confirmation(row, ts) do
     case Store.exec(
-           "UPDATE slack_task_drafts SET state='awaiting_confirmation',slack_message_ts=$2,expires_at=now()+interval '24 hours',claimed_at=NULL,error_category=NULL,updated_at=now() WHERE id=$1 AND state='processing'",
-           [row["id"], ts]
+           "UPDATE slack_task_drafts SET state='awaiting_confirmation',slack_message_ts=$2,expires_at=now()+interval '24 hours',claimed_at=NULL,error_category=NULL,updated_at=now() WHERE id=$1 AND state='processing' AND revision=$3",
+           [row["id"], ts, row["revision"]]
          ) do
       %{num_rows: 1} -> :ok
       _ -> {:error, :state_changed}
     end
   end
+
+  defp handle_processing_error(_row, :state_changed), do: :processed
 
   defp handle_processing_error(row, category) do
     category = safe_category(category)
@@ -525,8 +599,8 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     delay = min(round(:math.pow(2, row["attempts"])), 300)
 
     Store.exec(
-      "UPDATE slack_task_drafts SET state='received',claimed_at=NULL,next_attempt_at=now()+($2 * interval '1 second'),error_category=$3,updated_at=now() WHERE id=$1 AND state='processing'",
-      [row["id"], delay, category]
+      "UPDATE slack_task_drafts SET state='received',claimed_at=NULL,next_attempt_at=now()+($2 * interval '1 second'),error_category=$3,updated_at=now() WHERE id=$1 AND state='processing' AND revision=$4",
+      [row["id"], delay, category, row["revision"]]
     )
 
     :retry
@@ -534,8 +608,8 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
   defp mark_failed(row, category) do
     Store.exec(
-      "UPDATE slack_task_drafts SET state='failed',claimed_at=NULL,error_category=$2,updated_at=now() WHERE id=$1 AND state='processing'",
-      [row["id"], category]
+      "UPDATE slack_task_drafts SET state='failed',claimed_at=NULL,error_category=$2,updated_at=now() WHERE id=$1 AND state='processing' AND revision=$3",
+      [row["id"], category, row["revision"]]
     )
 
     :processed
@@ -567,11 +641,18 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   defp progress_ts(%{"slack_progress_message_ts" => ts}) when is_binary(ts), do: {:ok, ts}
 
   defp progress_ts(row) do
-    case Store.one("SELECT slack_progress_message_ts FROM slack_task_drafts WHERE id=$1", [
-           row["id"]
-         ]) do
+    case Store.one(
+           "SELECT slack_progress_message_ts FROM slack_task_drafts WHERE id=$1 AND revision=$2 AND state='processing'",
+           [
+             row["id"],
+             row["revision"]
+           ]
+         ) do
       %{"slack_progress_message_ts" => ts} when is_binary(ts) ->
         {:ok, ts}
+
+      nil ->
+        {:error, :state_changed}
 
       _ ->
         with {:ok, token} <- slack_token(row),

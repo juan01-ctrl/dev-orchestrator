@@ -3,7 +3,22 @@ import assert from "node:assert/strict";
 import { mkdtemp, writeFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectEnvironment, needsValidation, runEnvironmentCommands } from "../src/environment.ts";
+import { detectEnvironment, needsValidation, runEnvironmentCommands, validationContractError } from "../src/environment.ts";
+
+test("validation cannot disappear or change its command definition after the initial plan", async () => {
+  const root=await mkdtemp(join(tmpdir(),"orchestrator-check-contract-"));
+  try {
+    await writeFile(join(root,"package.json"),JSON.stringify({scripts:{test:"node --test"}}));
+    const original=await detectEnvironment(root);
+    await writeFile(join(root,"package.json"),JSON.stringify({scripts:{test:"echo passed"}}));
+    assert.match(validationContractError(["src/app.ts"],original,await detectEnvironment(root))??"",/changed/);
+    await writeFile(join(root,"package.json"),"{}");
+    assert.match(validationContractError(["src/app.ts"],original,await detectEnvironment(root))??"",/changed/);
+    const missing=await detectEnvironment(root);
+    assert.match(validationContractError(["app.py"],missing,missing)??"",/not configured/);
+    assert.equal(validationContractError(["README.md"],missing,missing),undefined);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
 
 test("Node setup follows the lockfile, selects existing checks and skips text-only work", async () => {
   const root = await mkdtemp(join(tmpdir(), "orchestrator-environment-"));

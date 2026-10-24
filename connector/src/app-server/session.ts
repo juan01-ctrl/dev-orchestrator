@@ -8,14 +8,14 @@ import type { TaskResult } from "../task-result.ts";
 import type { SandboxCommandResult } from "../environment.ts";
 
 type ThreadOptions = { cwd: string; permissions?: string; model?: string; approvalPolicy?: string };
-type SessionOptions = { binary: string; cwd: string; requestHandlers?: RequestHandlers; model?: string; allowedHosts?: string[] };
+type SessionOptions = { binary: string; cwd: string; requestHandlers?: RequestHandlers; model?: string; allowedHosts?: string[]; readOnly?: boolean };
 type TurnResult = { status: string; outcome?: string; result?: TaskResult };
 
-export function buildAppServerArgs(allowedHosts: string[] = []): string[] {
+export function buildAppServerArgs(allowedHosts: string[] = [], readOnly = false): string[] {
   const args = ["app-server", "--listen", "stdio://",
     "-c", 'default_permissions="dev-orchestrator"',
     "-c", 'permissions.dev-orchestrator.extends=":workspace"',
-    "-c", 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="read",".agents"="write",".codex"="read"}}',
+    "-c", readOnly ? 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="read",".git"="read",".agents"="read",".codex"="read"}}' : 'permissions.dev-orchestrator.filesystem={":workspace_roots"={"."="write",".git"="read",".agents"="write",".codex"="read"}}',
     "-c", "permissions.dev-orchestrator.network.enabled=false"];
   const hosts = [...new Set(allowedHosts)];
   if (hosts.some(host => !/^(?=.{1,253}$)[a-z0-9]+(?:[.-][a-z0-9]+)*$/i.test(host))) throw new Error("Invalid execution network allowlist.");
@@ -52,7 +52,7 @@ export class AppServerSession extends EventEmitter {
     const allowed = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
     const env = Object.fromEntries(allowed.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
     env.GIT_OPTIONAL_LOCKS = "0";
-    const args = buildAppServerArgs(options.allowedHosts);
+    const args = buildAppServerArgs(options.allowedHosts, options.readOnly);
     const session = new AppServerSession(spawn(options.binary, args, { cwd: options.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] }), options.requestHandlers);
     session.defaultModel = options.model;
     return session;

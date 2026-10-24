@@ -23,7 +23,7 @@ defmodule DevOrchestrator.Delivery.Verification do
   def validate_pr(run, result, pr) do
     repository = run["snapshot"]["repository"]
     base = run["snapshot"]["base_branch"]
-    branch = "task/" <> run["id"]
+    branch = get_in(run, ["snapshot", "task_branch"]) || "task/" <> run["id"]
 
     valid =
       valid_url?(result["pr_url"], repository) and result["repository"] == repository and
@@ -39,10 +39,15 @@ defmodule DevOrchestrator.Delivery.Verification do
       do:
         {:ok,
          Map.merge(result, %{
-           "outcome" => "pr_ready",
+           "outcome" => if(pr["changed_files"] == 0, do: "pr_no_diff", else: "pr_ready"),
            "summary" =>
-             result["summary"] ||
-               "Changes are available in a verified open pull request for review."
+             if(pr["changed_files"] == 0,
+               do:
+                 "The verified pull request was updated and now has no net file changes. Review whether to close it.",
+               else:
+                 result["summary"] ||
+                   "Changes are available in a verified open pull request for review."
+             )
          })},
       else: {:error, :unverified_pr}
   end

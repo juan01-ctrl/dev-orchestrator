@@ -319,18 +319,51 @@ defmodule DevOrchestrator.Connections.Slack do
       when action_id in ["create_linear_task", "cancel_linear_task"] and is_binary(draft_id) and
              is_binary(workspace_id) and is_binary(channel_id) and is_binary(user_id) and
              is_binary(message_ts) do
+    case String.split(draft_id, ":", parts: 2) do
+      [id] ->
+        normalized_action(action_id, id, 1, workspace_id, channel_id, user_id, message_ts)
+
+      [id, revision] ->
+        case Integer.parse(revision) do
+          {number, ""} when number > 0 ->
+            normalized_action(
+              action_id,
+              id,
+              number,
+              workspace_id,
+              channel_id,
+              user_id,
+              message_ts
+            )
+
+          _ ->
+            {:error, :invalid_action}
+        end
+    end
+  end
+
+  def normalize_action(_), do: {:error, :invalid_action}
+
+  defp normalized_action(
+         action_id,
+         draft_id,
+         revision,
+         workspace_id,
+         channel_id,
+         user_id,
+         message_ts
+       ) do
     {:ok,
      %{
        "action_id" => action_id,
        "draft_id" => draft_id,
+       "revision" => revision,
        "workspace_id" => workspace_id,
        "channel_id" => channel_id,
        "user_id" => user_id,
        "message_ts" => message_ts
      }}
   end
-
-  def normalize_action(_), do: {:error, :invalid_action}
 
   defp fetch_channels(_token, _cursor, _channels, _seen_cursors, page)
        when page >= @max_channel_pages,

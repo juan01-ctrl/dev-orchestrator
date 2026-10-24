@@ -12,7 +12,7 @@ const projectId="11111111-1111-4111-8111-111111111111";
 const runId="22222222-2222-4222-8222-222222222222";
 const credential={token:"short-lived-test-token",expires_at:"2099-01-01T00:00:00Z",author_name:"test-app[bot]",author_email:"12345+test-app[bot]@users.noreply.github.com"};
 
-async function fixture(performCommit=true) {
+async function fixture(performCommit=true, branch=`task/${runId}`) {
   const root=await realpath(await mkdtemp(join(tmpdir(),"orchestrator-publisher-")));
   const source=join(root,"source"),remote=join(root,"remote.git");
   await mkdir(source);await mkdir(remote);
@@ -21,7 +21,7 @@ async function fixture(performCommit=true) {
   await writeFile(join(source,"README.md"),"base\n");git(source,["add","README.md"]);git(source,["commit","-m","initial"]);
   git(remote,["init","--bare"]);git(source,["remote","add","origin",remote]);git(source,["push","origin","main"]);
   const repository=new RepositoryWorkspace({remoteURL:()=>remote});
-  const lease={id:runId,project_id:projectId,generation:1,lifecycle:1,snapshot:{repository:"acme/app",base_branch:"main"}};
+  const lease={id:runId,project_id:projectId,generation:1,lifecycle:1,snapshot:{repository:"acme/app",base_branch:"main",task_branch:branch}};
   const workspace=await repository.prepare(root,lease,credential);
   await writeFile(join(workspace.path,"change.txt"),"task change\n");
   if(performCommit){git(workspace.path,["add","change.txt"]);git(workspace.path,["commit","-m","test: add task change"]);}
@@ -33,6 +33,51 @@ const pullRequest=(sha:string)=>({
   html_url:"https://github.com/acme/app/pull/17",
   head:{sha,ref:`task/${runId}`,repo:{full_name:"acme/app"}},
   base:{ref:"main",repo:{full_name:"acme/app"}}
+});
+
+test("publishes a lifecycle branch without a legacy-ref namespace collision",async()=>{
+  const branch=`task-attempts/${runId}/attempt-1`;
+  const f=await fixture(true,branch);
+  try {
+    const sha=f.git(f.workspace.path,["rev-parse","HEAD"]);
+    const pr=pullRequest(sha);pr.head.ref=branch;
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{remoteURL:()=>f.remote,apiFetch:async()=>new Response(JSON.stringify([pr]),{status:200})});
+    const result=await publisher.publish("Lifecycle task","Verified",credential);
+    assert.equal(result.branch,branch);
+    assert.equal(f.git(f.remote,["rev-parse",`refs/heads/${branch}`]),sha);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("a PR repair publishes its reversal even when the final tree equals the original baseline",async()=>{
+  const f=await fixture();
+  try {
+    const delivered=f.git(f.workspace.path,["rev-parse","HEAD"]);
+    f.git(f.workspace.path,["push","origin",`HEAD:refs/heads/${f.workspace.branch}`]);
+    await rm(join(f.workspace.path,"change.txt"));
+    const context={workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir,previousHead:delivered};
+    const publisher=new Publisher(context,{remoteURL:()=>f.remote,apiFetch:async()=>new Response(JSON.stringify([pullRequest(f.git(f.workspace.path,["rev-parse","HEAD"]))]),{status:200})});
+    await publisher.commit("REVERT",credential);
+    assert.equal((await publisher.status()).changed,true);
+    const result=await publisher.publish("Revert addition","Requested changes",credential);
+    assert.notEqual(result.commit,delivered);
+    assert.equal(f.git(f.remote,["rev-parse",`refs/heads/${f.workspace.branch}`]),result.commit);
+    assert.equal(f.git(f.workspace.path,["diff",f.workspace.baseline,"HEAD"]),"");
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("a repair cannot recreate a closed pull request",async()=>{
+  const f=await fixture();
+  try {
+    const previousHead=f.git(f.workspace.path,["rev-parse","HEAD"]);
+    f.git(f.workspace.path,["push","origin",`HEAD:refs/heads/${f.workspace.branch}`]);
+    await writeFile(join(f.workspace.path,"repair.txt"),"repair");
+    const methods:string[]=[];
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir,previousHead,previousPullRequest:"https://github.com/acme/app/pull/17"},{remoteURL:()=>f.remote,apiFetch:async(url,init)=>{methods.push(init?.method??"GET");assert.equal(String(url),"https://api.github.com/repos/acme/app/pulls/17");return new Response(JSON.stringify({...pullRequest(previousHead),state:"closed"}),{status:200});}});
+    await publisher.commit("REPAIR",credential);
+    await assert.rejects(publisher.publish("Repair","Requested changes",credential),/changed|closed|match/i);
+    assert.ok(!methods.includes("POST"));
+    assert.equal(f.git(f.remote,["rev-parse",`refs/heads/${f.workspace.branch}`]),previousHead);
+  } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
 test("trusted connector commits uncommitted task files without agent access to shared Git metadata",async()=>{

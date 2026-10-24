@@ -11,6 +11,12 @@ defmodule DevOrchestrator.TaskDraftTest do
     "constraints_or_open_questions" => []
   }
 
+  test "confirmation buttons identify the displayed revision" do
+    blocks = TaskDraft.to_slack_blocks(@draft, "draft-1", 3)
+    actions = List.last(blocks)[:elements]
+    assert Enum.all?(actions, &(&1[:value] == "draft-1:3"))
+  end
+
   test "normalizes exact required fields and renders the same content for Linear and Slack" do
     assert {:ok, normalized} = TaskDraft.normalize(@draft)
     assert normalized == @draft

@@ -11,6 +11,12 @@ test("slot capacity is bounded and defaults to one", () => {
   for (const invalid of ["0", "11", "1.5", "abc", "-1"]) assert.throws(() => slotCapacity(invalid));
 });
 
+test("a pre-aborted parent signal never starts a slot",async()=>{
+  const controller=new AbortController();controller.abort();let started=0;
+  await runSlots(2,controller.signal,async()=>{started++;});
+  assert.equal(started,0);
+});
+
 test("slots execute concurrently with isolated identifiers and shared cancellation", async () => {
   const controller = new AbortController();
   const started: number[] = [];
@@ -36,12 +42,12 @@ test("one failed slot is surfaced even while another slot is still polling", asy
   ]), /slot startup failed/);
 });
 
-test("run pool creates each slot directory before starting Codex", async () => {
+test("a cancelled pool creates no runtime directories or Codex processes", async () => {
   const root = await mkdtemp(join(tmpdir(), "connector-slots-"));
   try {
     const controller = new AbortController();
     controller.abort();
-    await assert.rejects(runPool({ version: 2, server: "http://127.0.0.1:4100", token: "test", codexBinary: "missing-codex-test-binary" }, root, controller.signal, 1));
-    assert.equal((await stat(join(root, "slots", "1"))).isDirectory(), true);
+    await runPool({ version: 2, server: "http://127.0.0.1:4100", token: "test", codexBinary: "missing-codex-test-binary" }, root, controller.signal, 1);
+    await assert.rejects(stat(join(root, "slots", "1")), {code:"ENOENT"});
   } finally { await rm(root, { recursive: true, force: true }); }
 });

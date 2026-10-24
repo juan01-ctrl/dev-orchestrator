@@ -11,6 +11,7 @@ defmodule DevOrchestrator.RunsTest do
     {:ok, code} = Executors.create_enrollment(scope)
     {:ok, %{token: token}} = Executors.enroll(code, %{"name" => "Runner"})
     {:ok, executor} = Executors.authenticate(token)
+    executor = Map.put(executor, "capabilities", %{"workflow_version" => 2})
     :ok = Executors.bind(scope, executor["id"], project.id)
     %{scope: scope, project: project, executor: executor}
   end
@@ -36,6 +37,166 @@ defmodule DevOrchestrator.RunsTest do
     assert lease["snapshot"]["base_branch"] == "main"
   end
 
+  test "a durable human wait releases capacity and an answer queues a fenced continuation", ctx do
+    {:ok, run} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Question", "prompt" => "Implement"})
+
+    {:ok, lease} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{id: question_id, status: "awaiting_input"}} =
+             Runs.request_clarification(ctx.executor, lease, %{
+               "durable" => true,
+               "questions" => [%{"id" => "target", "question" => "Which form?"}]
+             })
+
+    {:ok, paused} = Runs.get(ctx.scope, run["id"])
+    assert paused["state"] == "awaiting_input"
+    assert paused["lease_expires_at"] == nil
+
+    {:ok, other} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Other", "prompt" => "Implement"})
+
+    assert {:ok, %{"id" => other_id}} = Runs.claim(ctx.executor)
+    assert other_id == other["id"]
+    assert {:ok, %{state: "cancelled"}} = Runs.cancel(ctx.scope, other_id)
+
+    assert :ok =
+             Runs.answer_clarification(ctx.scope, question_id, %{
+               "answers" => %{"target" => "Signup"}
+             })
+
+    assert {:ok, %{action: "pause"}} =
+             Runs.reconcile(ctx.executor, lease, %{"thread_id" => "thread-paused"})
+
+    assert {:ok, nil} = Runs.claim(ctx.executor)
+
+    Store.exec("UPDATE runs SET lease_expires_at=now()-interval '1 second' WHERE id=$1", [
+      run["id"]
+    ])
+
+    assert {:ok, resumed} = Runs.claim(ctx.executor)
+    assert resumed["id"] == run["id"]
+    assert resumed["generation"] > lease["generation"]
+    assert resumed["snapshot"]["task_branch"] == lease["snapshot"]["task_branch"]
+
+    assert resumed["snapshot"]["continuation"]["answer"]["answers"]["target"]["answers"] == [
+             "Signup"
+           ]
+
+    assert {:error, :clarification_not_open} =
+             Runs.answer_clarification(ctx.scope, question_id, %{
+               "answers" => %{"target" => "Other"}
+             })
+  end
+
+  test "automatic retries keep the exact project snapshot", ctx do
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{"title" => "Frozen", "prompt" => "Implement"})
+
+    {:ok, first} = Runs.claim(ctx.executor)
+
+    assert {:ok, %{state: "queued"}} =
+             Runs.append_event(ctx.executor, first, %{
+               "sequence" => 1,
+               "kind" => "failure",
+               "data" => %{"category" => "execution_failed"}
+             })
+
+    {:ok, _} =
+      Projects.update_project(ctx.scope, ctx.project.id, %{
+        "instructions" => "Changed later",
+        "base_branch" => "develop"
+      })
+
+    assert {:ok, nil} = Runs.claim(Map.put(ctx.executor, "capabilities", %{}))
+
+    {:ok, second} = Runs.claim(ctx.executor)
+    assert second["snapshot"] == first["snapshot"]
+  end
+
+  test "durable questions cannot resume after cancellation, expiry or executor revocation", ctx do
+    for reason <- [:cancel, :expire, :revoke] do
+      {:ok, run} =
+        Runs.create(ctx.scope, ctx.project.id, %{
+          "title" => "Pause #{reason}",
+          "prompt" => "Implement"
+        })
+
+      {:ok, lease} = Runs.claim(ctx.executor)
+
+      {:ok, %{id: question}} =
+        Runs.request_clarification(ctx.executor, lease, %{
+          "durable" => true,
+          "questions" => [%{"id" => "form", "question" => "Which form?"}]
+        })
+
+      case reason do
+        :cancel ->
+          assert {:ok, _} = Runs.cancel(ctx.scope, run["id"])
+
+        :expire ->
+          Store.exec(
+            "UPDATE run_clarifications SET expires_at=now()-interval '1 second' WHERE id=$1",
+            [question]
+          )
+
+          Runs.expire_leases()
+
+        :revoke ->
+          assert :ok =
+                   Runs.answer_clarification(ctx.scope, question, %{
+                     "answers" => %{"form" => "Signup"}
+                   })
+
+          assert :ok = Executors.revoke(ctx.scope, ctx.executor["id"])
+      end
+
+      assert {:ok, preserved} = Runs.get(ctx.scope, run["id"])
+
+      case reason do
+        :revoke ->
+          assert %{"state" => "blocked", "result" => %{"category" => "authentication_required"}} =
+                   preserved
+
+        _ ->
+          assert %{"state" => "cancelled"} = preserved
+      end
+
+      assert {:error, :clarification_not_open} =
+               Runs.answer_clarification(ctx.scope, question, %{
+                 "answers" => %{"form" => "Signup"}
+               })
+    end
+  end
+
+  test "investigation rejects publication credentials and completes only a report", ctx do
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{
+        "title" => "Diagnose",
+        "prompt" => "Investigate",
+        "mode" => "investigate"
+      })
+
+    assert {:ok, nil} = Runs.claim(Map.put(ctx.executor, "capabilities", %{}))
+    {:ok, lease} = Runs.claim(ctx.executor)
+    assert lease["snapshot"]["mode"] == "investigate"
+    assert {:error, :invalid_purpose} = Runs.github_token(ctx.executor, lease, :publish)
+
+    assert {:error, :invalid_event} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "candidate",
+               "data" => %{}
+             })
+
+    assert {:ok, %{state: "succeeded"}} =
+             Runs.append_event(ctx.executor, lease, %{
+               "sequence" => 1,
+               "kind" => "report",
+               "data" => %{"summary" => "Diagnosis with evidence"}
+             })
+  end
+
   test "automatic retries share one deadline and expire with a single final report", ctx do
     {:ok, run} = Runs.create(ctx.scope, ctx.project.id, %{"title" => "Budget", "prompt" => "Run"})
     {:ok, first} = Runs.claim(ctx.executor)
@@ -51,6 +212,7 @@ defmodule DevOrchestrator.RunsTest do
 
     {:ok, second} = Runs.claim(ctx.executor)
     assert second["snapshot"]["execution_deadline_at_ms"] == deadline
+    assert second["snapshot"]["task_branch"] == "task-attempts/#{run["id"]}/attempt-1"
 
     expired =
       Map.put(
@@ -100,7 +262,7 @@ defmodule DevOrchestrator.RunsTest do
     candidate = %{
       "repository" => "acme/app",
       "base_branch" => "main",
-      "branch" => "task/" <> run["id"],
+      "branch" => lease["snapshot"]["task_branch"],
       "commit" => String.duplicate("a", 40),
       "pr_url" => "https://github.com/acme/app/pull/1"
     }

@@ -307,6 +307,40 @@ defmodule DevOrchestrator.SlackIntakeTest do
              "creating"
   end
 
+  test "mentioned corrections revise the existing draft once and invalidate the previous confirmation",
+       context do
+    id = insert_confirmation_draft(context)
+
+    event = %{
+      "event_id" => "Ev-correction",
+      "workspace_id" => "T1",
+      "channel_id" => "C1",
+      "requester_slack_user_id" => "U1",
+      "message_ts" => "1.3",
+      "thread_ts" => "1.2",
+      "text" => "Use the publish button instead",
+      "file_ids" => []
+    }
+
+    assert {:ok, :revised} = SlackDrafts.accept(event)
+    assert {:ok, :duplicate} = SlackDrafts.accept(event)
+
+    assert {:ok, :ignored} =
+             SlackDrafts.accept(%{
+               event
+               | "event_id" => "Ev-other-author",
+                 "requester_slack_user_id" => "U2"
+             })
+
+    row = Store.one("SELECT * FROM slack_task_drafts WHERE id=$1", [id])
+    assert row["revision"] == 2
+    assert row["state"] == "received"
+    assert row["message_text"] == event["text"]
+    assert row["task_draft"]["title"] == "A task"
+    assert {:error, :stale_draft} = SlackDrafts.confirm(action(id, "U1"))
+    assert Store.one("SELECT count(*) AS count FROM slack_task_drafts")["count"] == 1
+  end
+
   test "confirming the wrong message or workspace cannot mutate the draft", context do
     draft_id = insert_confirmation_draft(context)
 
@@ -318,6 +352,38 @@ defmodule DevOrchestrator.SlackIntakeTest do
 
     assert Store.one("SELECT state FROM slack_task_drafts WHERE id=$1", [draft_id])["state"] ==
              "awaiting_confirmation"
+  end
+
+  test "a text correction arriving during pending audio keeps that audio in the latest revision",
+       context do
+    id = insert_confirmation_draft(context)
+
+    event = %{
+      "event_id" => "Ev-pending-audio",
+      "workspace_id" => "T1",
+      "channel_id" => "C1",
+      "requester_slack_user_id" => "U1",
+      "message_ts" => "4.1",
+      "thread_ts" => "1.2",
+      "text" => "",
+      "file_ids" => ["F-CORRECTION"]
+    }
+
+    assert {:ok, :revised} = SlackDrafts.accept(event)
+
+    assert {:ok, :revised} =
+             SlackDrafts.accept(%{
+               event
+               | "event_id" => "Ev-followup-text",
+                 "message_ts" => "4.2",
+                 "text" => "Also include validation",
+                 "file_ids" => []
+             })
+
+    row = Store.one("SELECT * FROM slack_task_drafts WHERE id=$1", [id])
+    assert row["revision"] == 3
+    assert row["file_id"] == "F-CORRECTION"
+    assert row["message_text"] =~ "Also include validation"
   end
 
   test "requester cancellation is terminal and repeated cancellation is idempotent", context do

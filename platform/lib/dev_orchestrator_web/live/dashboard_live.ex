@@ -524,6 +524,15 @@ defmodule DevOrchestratorWeb.DashboardLive do
                   value={@selected.data["concurrency"]}
                 />
                 <label for="project-model">Model override</label>
+                <input type="hidden" name="pr_feedback_enabled" value="false" />
+                <label>
+                  <input
+                    type="checkbox"
+                    name="pr_feedback_enabled"
+                    value="true"
+                    checked={@selected.data["pr_feedback_enabled"] == true}
+                  /> Repair failed CI and requested PR changes (maximum 3 rounds)
+                </label>
                 <select id="project-model" name="model">
                   <option value="">Automatic</option>
                   <option
@@ -755,12 +764,12 @@ defmodule DevOrchestratorWeb.DashboardLive do
                 <div :if={@code}>
                   <h2>Pair within 10 minutes</h2>
                   <p>Run this command on the computer that will process tasks:</p>
-                  <pre>mkdir -p "$HOME/.local/share/dev-orchestrator" && npx --yes dev-orchestrator-connector@0.1.5 pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
+                  <pre>mkdir -p "$HOME/.local/share/dev-orchestrator" && npx --yes dev-orchestrator-connector@0.2.0 pair --server {Application.fetch_env!(:dev_orchestrator,:public_url)} --code {@code} --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
                   <button
                     type="button"
                     class="secondary copy-command"
                     aria-label="Copy pairing command"
-                    data-copy={"mkdir -p \"$HOME/.local/share/dev-orchestrator\" && npx --yes dev-orchestrator-connector@0.1.5 pair --server #{Application.fetch_env!(:dev_orchestrator, :public_url)} --code #{@code} --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
+                    data-copy={"mkdir -p \"$HOME/.local/share/dev-orchestrator\" && npx --yes dev-orchestrator-connector@0.2.0 pair --server #{Application.fetch_env!(:dev_orchestrator, :public_url)} --code #{@code} --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
                   >
                     <.copy_icon /> <span class="copy-label">Copy command</span>
                   </button>
@@ -793,14 +802,14 @@ defmodule DevOrchestratorWeb.DashboardLive do
                     }>{executor_status(e)}</span>
                   </div>
                   <p class="fine muted">Run this command in a terminal and leave it open:</p>
-                  <pre>npx --yes dev-orchestrator-connector@0.1.5 run --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
+                  <pre>npx --yes dev-orchestrator-connector@0.2.0 run --config "$HOME/.local/share/dev-orchestrator/connector.json"</pre>
                   <div class="executor-card-actions">
                     <button
                       :if={@scope.role == "owner" and !e["revoked_at"]}
                       type="button"
                       class="secondary copy-command"
                       aria-label="Copy start command"
-                      data-copy={"npx --yes dev-orchestrator-connector@0.1.5 run --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
+                      data-copy={"npx --yes dev-orchestrator-connector@0.2.0 run --config \"$HOME/.local/share/dev-orchestrator/connector.json\""}
                     >
                       <.copy_icon /> <span class="copy-label">Copy command</span>
                     </button>
@@ -859,6 +868,11 @@ defmodule DevOrchestratorWeb.DashboardLive do
             </label>
             <.field name="title" label="Task title" required />
             <label>
+              Task mode<select name="mode"><option value="implement">Implement changes</option><option value="investigate">
+                Investigate and report
+              </option></select>
+            </label>
+            <label>
               Instructions<textarea name="prompt" required rows="4" maxlength="32000"></textarea>
             </label>
             <button>Queue task</button>
@@ -876,6 +890,11 @@ defmodule DevOrchestratorWeb.DashboardLive do
             ]}</span><span>Lifecycle {@selected_run["lifecycle"]}</span>
           </div>
           <section :if={@selected_run["result"]} class="panel">
+            <p :if={@selected_run["pr_observation"]} class="fine">
+              PR follow-up: {humanize(@selected_run["pr_observation"]["status"])} · Repairs: {@selected_run[
+                "repair_count"
+              ] || 0}/3
+            </p>
             <h2>Result</h2>
             <p>{@selected_run["result"]["summary"]}</p>
             <a

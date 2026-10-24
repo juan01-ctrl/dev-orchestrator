@@ -1,6 +1,43 @@
 defmodule DevOrchestrator.EventTest do
   use ExUnit.Case, async: true
+
+  test "only an explicit checkpoint flag makes a failure resumable" do
+    alias DevOrchestrator.Runs.Event
+    assert {:ok, %{"resumable" => true}} = Event.sanitize(%{}, "failure", %{"resumable" => true})
+
+    assert {:ok, %{"resumable" => false}} =
+             Event.sanitize(%{}, "failure", %{"resumable" => "true"})
+  end
+
   alias DevOrchestrator.Runs.Event
+
+  test "candidate events use the frozen attempt branch" do
+    run = %{
+      "id" => "run-1",
+      "snapshot" => %{
+        "repository" => "acme/app",
+        "base_branch" => "main",
+        "task_branch" => "task/run-1/attempt-2"
+      }
+    }
+
+    candidate = %{
+      "repository" => "acme/app",
+      "base_branch" => "main",
+      "branch" => "task/run-1/attempt-2",
+      "commit" => String.duplicate("a", 40),
+      "pr_url" => "https://github.com/acme/app/pull/1"
+    }
+
+    assert {:ok, ^candidate} = Event.sanitize(run, "candidate", candidate)
+
+    assert {:error, :invalid_event} =
+             Event.sanitize(
+               run,
+               "candidate",
+               Map.put(candidate, "branch", "task/run-1/attempt-1")
+             )
+  end
 
   test "structured blockers retain actionable bounded details without secrets" do
     {:ok, data} =

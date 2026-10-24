@@ -1,77 +1,31 @@
 defmodule DevOrchestrator.Background do
-  use GenServer
-  require Logger
-  def start_link(_), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  use Supervisor
 
-  def init(state) do
-    Process.send_after(self(), :tick, 5_000)
-    Process.send_after(self(), :reconcile_linear, 3_000)
+  def start_link(opts), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
 
-    {:ok,
-     Map.merge(
-       %{last_linear_reconcile: 0, maintenance_running: false, reconciliation_running: false},
-       if(is_map(state), do: state, else: %{})
-     )}
+  def init(_) do
+    jobs = [
+      {:leases, 5_000, &DevOrchestrator.Runs.expire_leases/0},
+      {:inbox, 1_000, &DevOrchestrator.Intake.Inbox.process_one/0},
+      {:slack_drafts, 1_000, &DevOrchestrator.Intake.SlackDrafts.process_one/0},
+      {:slack_creations, 1_000, &DevOrchestrator.Intake.SlackDrafts.create_one/0},
+      {:slack_expiry, 5_000, &DevOrchestrator.Intake.SlackDrafts.expire/0},
+      {:outbox, 1_000, &DevOrchestrator.Delivery.Worker.drain/0},
+      {:reconciliation, 60_000, &DevOrchestrator.Intake.Reconciler.tick_all/0},
+      {:pr_feedback, 60_000, &DevOrchestrator.Runs.PRObserver.tick/0}
+    ]
+
+    children =
+      [{Task.Supervisor, name: DevOrchestrator.BackgroundTasks}] ++
+        Enum.map(jobs, fn {id, interval, operation} ->
+          {DevOrchestrator.Background.Worker,
+           id: id,
+           interval: interval,
+           initial_delay: 3_000,
+           task_supervisor: DevOrchestrator.BackgroundTasks,
+           operation: operation}
+        end)
+
+    Supervisor.init(children, strategy: :rest_for_one)
   end
-
-  def handle_info(:tick, %{maintenance_running: false} = state) do
-    owner = self()
-
-    Task.start(fn ->
-      try do
-        DevOrchestrator.Runs.expire_leases()
-        DevOrchestrator.Intake.Inbox.process_one()
-        DevOrchestrator.Intake.SlackDrafts.process_one()
-        DevOrchestrator.Intake.SlackDrafts.create_one()
-        DevOrchestrator.Intake.SlackDrafts.expire()
-        DevOrchestrator.Delivery.Worker.drain()
-      rescue
-        _ -> Logger.warning("Background operation failed; retained durable state for recovery.")
-      after
-        send(owner, :maintenance_finished)
-      end
-    end)
-
-    Process.send_after(self(), :tick, 5_000)
-    {:noreply, %{state | maintenance_running: true}}
-  end
-
-  def handle_info(:tick, state) do
-    Process.send_after(self(), :tick, 5_000)
-    {:noreply, state}
-  end
-
-  def handle_info(:maintenance_finished, state),
-    do: {:noreply, %{state | maintenance_running: false}}
-
-  def handle_info(:reconcile_linear, %{reconciliation_running: false} = state) do
-    owner = self()
-
-    Task.start(fn ->
-      try do
-        DevOrchestrator.Intake.Reconciler.tick_all()
-      rescue
-        _ -> Logger.warning("Linear reconciliation failed; the saved cursor will be retried.")
-      after
-        send(owner, :reconciliation_finished)
-      end
-    end)
-
-    Process.send_after(self(), :reconcile_linear, 60_000)
-
-    {:noreply,
-     %{
-       state
-       | reconciliation_running: true,
-         last_linear_reconcile: System.monotonic_time(:millisecond)
-     }}
-  end
-
-  def handle_info(:reconcile_linear, state) do
-    Process.send_after(self(), :reconcile_linear, 60_000)
-    {:noreply, state}
-  end
-
-  def handle_info(:reconciliation_finished, state),
-    do: {:noreply, %{state | reconciliation_running: false}}
 end

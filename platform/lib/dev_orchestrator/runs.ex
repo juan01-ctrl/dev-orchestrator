@@ -32,7 +32,7 @@ defmodule DevOrchestrator.Runs do
     with {:ok, _run} <- get(scope, id) do
       rows =
         Store.rows(
-          "SELECT c.id,CASE WHEN c.status='open' AND (c.expires_at<=now() OR r.state NOT IN ('running','leased','waiting_for_executor')) THEN 'expired' ELSE c.status END AS status,c.questions,c.answer,c.created_at FROM run_clarifications c JOIN runs r ON r.id=c.run_id AND r.organization_id=c.organization_id WHERE c.run_id=$1 AND c.organization_id=$2 ORDER BY c.created_at DESC LIMIT 10",
+          "SELECT c.id,CASE WHEN c.status='open' AND (c.expires_at<=now() OR r.state NOT IN ('running','leased','waiting_for_executor','awaiting_input')) THEN 'expired' ELSE c.status END AS status,c.questions,c.answer,c.created_at FROM run_clarifications c JOIN runs r ON r.id=c.run_id AND r.organization_id=c.organization_id WHERE c.run_id=$1 AND c.organization_id=$2 ORDER BY c.created_at DESC LIMIT 10",
           [id, scope.organization_id]
         )
 
@@ -66,6 +66,9 @@ defmodule DevOrchestrator.Runs do
         if existing do
           clarification_response(existing)
         else
+          durable =
+            params["durable"] == true and get_in(run, ["snapshot", "workflow_version"]) == 2
+
           Store.exec(
             "UPDATE run_clarifications SET status='expired' WHERE run_id=$1 AND lifecycle=$2 AND generation=$3 AND status='open' AND expires_at<=now()",
             [run["id"], run["lifecycle"], run["generation"]]
@@ -79,7 +82,7 @@ defmodule DevOrchestrator.Runs do
 
           clarification =
             Store.one(
-              "INSERT INTO run_clarifications(id,organization_id,project_id,run_id,lifecycle,generation,request_key,questions,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '20 minutes') RETURNING *",
+              "INSERT INTO run_clarifications(id,organization_id,project_id,run_id,lifecycle,generation,request_key,questions,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+($9 * interval '1 second')) RETURNING *",
               [
                 Store.id(),
                 run["organization_id"],
@@ -88,12 +91,38 @@ defmodule DevOrchestrator.Runs do
                 run["lifecycle"],
                 run["generation"],
                 request_key,
-                questions
+                questions,
+                if(durable, do: 86_400, else: 1_200)
               ]
             )
 
           DevOrchestrator.Delivery.Outbox.enqueue_clarification(run, clarification)
-          clarification_response(clarification)
+
+          if durable do
+            remaining =
+              max(
+                0,
+                min(
+                  1_200_000,
+                  run["snapshot"]["execution_deadline_at_ms"] - System.system_time(:millisecond)
+                )
+              )
+
+            snapshot =
+              run["snapshot"]
+              |> Map.delete("execution_deadline_at_ms")
+              |> Map.put("execution_remaining_ms", remaining)
+              |> Map.put("pending_clarification_id", clarification["id"])
+
+            Store.exec(
+              "UPDATE runs SET state='awaiting_input',lease_expires_at=NULL,snapshot=$2,updated_at=now() WHERE id=$1",
+              [run["id"], snapshot]
+            )
+
+            %{id: clarification["id"], status: "awaiting_input"}
+          else
+            clarification_response(clarification)
+          end
         end
       end)
 
@@ -132,7 +161,7 @@ defmodule DevOrchestrator.Runs do
              Store.transaction(fn ->
                run =
                  Store.one(
-                   "SELECT id,state FROM runs WHERE id=(SELECT run_id FROM run_clarifications WHERE id=$1 AND organization_id=$2) AND organization_id=$2 FOR UPDATE",
+                   "SELECT * FROM runs WHERE id=(SELECT run_id FROM run_clarifications WHERE id=$1 AND organization_id=$2) AND organization_id=$2 FOR UPDATE",
                    [id, scope.organization_id]
                  ) || Store.halt(:clarification_not_found)
 
@@ -143,7 +172,12 @@ defmodule DevOrchestrator.Runs do
                  ) || Store.halt(:clarification_not_found)
 
                if clarification["status"] != "open" or
-                    run["state"] not in ["running", "leased", "waiting_for_executor"],
+                    run["state"] not in [
+                      "running",
+                      "leased",
+                      "waiting_for_executor",
+                      "awaiting_input"
+                    ],
                   do: Store.halt(:clarification_not_open)
 
                if DateTime.compare(clarification["expires_at"], DateTime.utc_now()) != :gt do
@@ -158,6 +192,29 @@ defmodule DevOrchestrator.Runs do
                    {:ok, normalized} -> normalized
                    {:error, reason} -> Store.halt(reason)
                  end
+
+               if run["state"] == "awaiting_input" do
+                 if get_in(run, ["snapshot", "pending_clarification_id"]) != id,
+                   do: Store.halt(:clarification_not_open)
+
+                 continuation = %{
+                   "kind" => "human_answer",
+                   "question_id" => id,
+                   "questions" => clarification["questions"],
+                   "answer" => answer
+                 }
+
+                 snapshot =
+                   run["snapshot"]
+                   |> Map.put("continuation", continuation)
+                   |> Map.put("resume_remaining_ms", run["snapshot"]["execution_remaining_ms"])
+                   |> Map.delete("pending_clarification_id")
+
+                 Store.exec(
+                   "UPDATE runs SET state='queued',generation=generation+1,sequence=0,snapshot=$2,lease_expires_at=now()+interval '90 seconds',updated_at=now() WHERE id=$1",
+                   [run["id"], snapshot]
+                 )
+               end
 
                Store.one(
                  "UPDATE run_clarifications SET status='answered',answer=$2,answered_at=now() WHERE id=$1 RETURNING run_id",
@@ -192,12 +249,13 @@ defmodule DevOrchestrator.Runs do
     with {:ok, _} <- Projects.get_project(scope, project_id),
          true <-
            is_binary(attrs["title"]) and byte_size(attrs["title"]) in 1..240 and
-             is_binary(attrs["prompt"]) and byte_size(attrs["prompt"]) in 1..32_000 do
+             is_binary(attrs["prompt"]) and byte_size(attrs["prompt"]) in 1..32_000 and
+             Map.get(attrs, "mode", "implement") in ["implement", "investigate"] do
       source = attrs["source_key"] || "manual:" <> Store.id()
 
       {:ok,
        Store.one(
-         "INSERT INTO runs(id,organization_id,project_id,source_key,title,prompt,issue_url) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(project_id,source_key) DO UPDATE SET source_key=excluded.source_key RETURNING *",
+         "INSERT INTO runs(id,organization_id,project_id,source_key,title,prompt,issue_url,mode) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(project_id,source_key) DO UPDATE SET source_key=excluded.source_key RETURNING *",
          [
            Store.id(),
            scope.organization_id,
@@ -205,7 +263,8 @@ defmodule DevOrchestrator.Runs do
            source,
            attrs["title"],
            attrs["prompt"],
-           attrs["issue_url"]
+           attrs["issue_url"],
+           Map.get(attrs, "mode", "implement")
          ]
        )}
     else
@@ -225,37 +284,27 @@ defmodule DevOrchestrator.Runs do
             """
               SELECT p.* FROM projects p JOIN executor_bindings b ON b.project_id=p.id AND b.organization_id=p.organization_id
               WHERE b.executor_id=$1 AND b.organization_id=$2
-              AND EXISTS(SELECT 1 FROM runs r WHERE r.project_id=p.id AND r.state='queued')
+              AND EXISTS(SELECT 1 FROM runs r WHERE r.project_id=p.id AND r.state='queued' AND (r.lease_expires_at IS NULL OR r.lease_expires_at<=now()) AND (r.executor_id IS NULL OR r.executor_id=$1) AND ($3 OR (r.lifecycle=1 AND r.mode='implement' AND COALESCE(r.snapshot->>'workflow_version','1')='1' AND r.snapshot->'continuation' IS NULL AND COALESCE(r.snapshot->>'task_branch','task/'||r.id)='task/'||r.id)))
               AND (SELECT count(*) FROM runs r WHERE r.project_id=p.id AND r.state IN ('leased','running','waiting_for_executor'))<p.concurrency
               ORDER BY p.created_at FOR UPDATE OF p SKIP LOCKED LIMIT 1
             """,
-            [executor["id"], executor["organization_id"]]
+            [executor["id"], executor["organization_id"], workflow_capable?(executor)]
           )
 
         if project do
           run =
             Store.one(
-              "SELECT * FROM runs WHERE project_id=$1 AND organization_id=$2 AND state='queued' ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",
-              [project["id"], executor["organization_id"]]
+              "SELECT * FROM runs WHERE project_id=$1 AND organization_id=$2 AND state='queued' AND (lease_expires_at IS NULL OR lease_expires_at<=now()) AND (executor_id IS NULL OR executor_id=$4) AND ($3 OR (lifecycle=1 AND mode='implement' AND COALESCE(snapshot->>'workflow_version','1')='1' AND snapshot->'continuation' IS NULL AND COALESCE(snapshot->>'task_branch','task/'||id)='task/'||id)) ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1",
+              [
+                project["id"],
+                executor["organization_id"],
+                workflow_capable?(executor),
+                executor["id"]
+              ]
             )
 
           if run do
-            snapshot =
-              Projects.snapshot(%{data: project})
-              |> Map.put(
-                "execution_policy",
-                DevOrchestrator.ExecutionPolicy.for_task(project, run)
-              )
-              |> Map.put("execution_lifecycle", run["lifecycle"])
-              |> Map.put(
-                "execution_deadline_at_ms",
-                FailureBudget.deadline(run, System.system_time(:millisecond))
-              )
-              |> Map.put("task_assets", lease_assets(run["source_context"]))
-              |> Map.put(
-                "task_assets_skipped",
-                get_in(run, ["source_context", "skipped_count"]) || 0
-              )
+            snapshot = attempt_snapshot(project, run, executor)
 
             leased =
               Store.one(
@@ -306,10 +355,23 @@ defmodule DevOrchestrator.Runs do
   end
 
   def github_token(executor, lease, purpose) when purpose in [:checkout, :publish] do
-    with {:ok, access} <- Store.transaction(fn -> github_token_access!(executor, lease) end),
+    allowed = fn ->
+      run = leased_run!(executor, lease)
+
+      if purpose == :publish and get_in(run, ["snapshot", "mode"]) == "investigate",
+        do: Store.halt(:invalid_purpose)
+
+      github_token_access!(executor, lease)
+    end
+
+    with {:ok, access} <- Store.transaction(allowed),
          {:ok, token} <-
            GitHub.installation_token(access.installation_id, access.repository, purpose),
-         {:ok, _} <- Store.transaction(fn -> github_token_access!(executor, lease, access) end) do
+         {:ok, _} <-
+           Store.transaction(fn ->
+             allowed.()
+             github_token_access!(executor, lease, access)
+           end) do
       config = OAuth.config("github")
       app_id = config[:app_id]
       app_slug = config[:app_slug]
@@ -381,7 +443,7 @@ defmodule DevOrchestrator.Runs do
 
   def append_event(executor, lease, %{"sequence" => sequence, "kind" => kind} = event)
       when is_integer(sequence) and sequence > 0 and
-             kind in ~w(started progress activity failure blocked candidate no_changes) do
+             kind in ~w(started progress activity failure blocked candidate no_changes report) do
     result =
       Store.transaction(fn ->
         live_executor!(executor)
@@ -522,8 +584,16 @@ defmodule DevOrchestrator.Runs do
           run["lifecycle"] != lease["lifecycle"]
 
       cond do
+        run["executor_id"] == executor["id"] and run["lifecycle"] == lease["lifecycle"] and
+          run["generation"] == lease["generation"] + 1 and run["state"] == "queued" and
+            get_in(run, ["snapshot", "continuation", "kind"]) == "human_answer" ->
+          %{action: "pause", state: "queued"}
+
         superseded? ->
           %{action: "archive", state: run["state"], reason: "superseded"}
+
+        run["state"] == "awaiting_input" ->
+          %{action: "pause", state: "awaiting_input"}
 
         run["state"] in ~w(succeeded failed cancelled blocked queued) ->
           %{action: "acknowledge", state: run["state"]}
@@ -559,7 +629,7 @@ defmodule DevOrchestrator.Runs do
   def retry(scope, id) do
     with true <- Accounts.owner?(scope), {:ok, _} <- get(scope, id) do
       case Store.one(
-             "UPDATE runs SET state='queued',lifecycle=lifecycle+1,generation=generation+1,failures='{}',result=NULL,snapshot=NULL,executor_id=NULL,lease_expires_at=NULL,sequence=0 WHERE id=$1 AND organization_id=$2 AND state IN ('blocked','failed','cancelled') RETURNING id",
+             "UPDATE runs SET state='queued',lifecycle=lifecycle+1,generation=generation+1,failures='{}',result=NULL,snapshot=NULL,executor_id=NULL,lease_expires_at=NULL,sequence=0,repair_count=0,pr_observation=NULL WHERE id=$1 AND organization_id=$2 AND state IN ('blocked','failed','cancelled') RETURNING id",
              [id, scope.organization_id]
            ) do
         nil -> {:error, :not_retryable}
@@ -595,6 +665,17 @@ defmodule DevOrchestrator.Runs do
   def expire_leases do
     Store.transaction(fn ->
       Store.rows(
+        "SELECT r.* FROM runs r JOIN run_clarifications c ON c.id=r.snapshot->>'pending_clarification_id' WHERE r.state='awaiting_input' AND c.expires_at<=now() FOR UPDATE OF r SKIP LOCKED"
+      )
+      |> Enum.each(fn run ->
+        finish(run, "cancelled", %{
+          "summary" =>
+            "The human response window expired. Preserved work can be reviewed before starting a fresh attempt.",
+          "category" => "missing_context"
+        })
+      end)
+
+      Store.rows(
         "SELECT * FROM runs WHERE state IN ('queued','leased','running','waiting_for_executor') AND (snapshot->>'execution_deadline_at_ms')::bigint <= $1 ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 100",
         [System.system_time(:millisecond)]
       )
@@ -617,7 +698,7 @@ defmodule DevOrchestrator.Runs do
 
   def executor_revoked(executor) do
     Store.rows(
-      "SELECT * FROM runs WHERE organization_id=$1 AND executor_id=$2 AND state IN ('leased','running','waiting_for_executor') FOR UPDATE",
+      "SELECT * FROM runs WHERE organization_id=$1 AND executor_id=$2 AND state IN ('queued','leased','running','waiting_for_executor','awaiting_input') FOR UPDATE",
       [executor["organization_id"], executor["id"]]
     )
     |> Enum.each(fn run ->
@@ -636,6 +717,44 @@ defmodule DevOrchestrator.Runs do
       "SELECT id FROM executors WHERE id=$1 AND organization_id=$2 AND revoked_at IS NULL",
       [executor["id"], executor["organization_id"]]
     ) || Store.halt(:unauthorized)
+  end
+
+  defp workflow_capable?(executor),
+    do: get_in(executor, ["capabilities", "workflow_version"]) == 2
+
+  defp attempt_snapshot(project, run, executor) do
+    if is_map(run["snapshot"]) do
+      snapshot = Map.put_new(run["snapshot"], "task_branch", "task/#{run["id"]}")
+
+      if is_integer(snapshot["resume_remaining_ms"]),
+        do:
+          snapshot
+          |> Map.put(
+            "execution_deadline_at_ms",
+            System.system_time(:millisecond) + snapshot["resume_remaining_ms"]
+          )
+          |> Map.delete("resume_remaining_ms"),
+        else: snapshot
+    else
+      Projects.snapshot(%{data: project})
+      |> Map.put("workflow_version", if(workflow_capable?(executor), do: 2, else: 1))
+      |> Map.put("mode", run["mode"] || "implement")
+      |> Map.put("execution_policy", DevOrchestrator.ExecutionPolicy.for_task(project, run))
+      |> Map.put("execution_lifecycle", run["lifecycle"])
+      |> Map.put(
+        "execution_deadline_at_ms",
+        FailureBudget.deadline(run, System.system_time(:millisecond))
+      )
+      |> Map.put("task_assets", lease_assets(run["source_context"]))
+      |> Map.put("task_assets_skipped", get_in(run, ["source_context", "skipped_count"]) || 0)
+      |> Map.put(
+        "task_branch",
+        if(workflow_capable?(executor),
+          do: "task-attempts/#{run["id"]}/attempt-#{run["lifecycle"]}",
+          else: "task/#{run["id"]}"
+        )
+      )
+    end
   end
 
   defp leased_run!(executor, lease) do
@@ -681,9 +800,16 @@ defmodule DevOrchestrator.Runs do
         "detail" => data["summary"]
       })
     else
+      resumable = data["resumable"] == true and get_in(run, ["snapshot", "workflow_version"]) == 2
+
+      snapshot =
+        if resumable,
+          do: Map.put(run["snapshot"], "continuation", %{"kind" => "execution_retry"}),
+          else: run["snapshot"]
+
       Store.exec(
-        "UPDATE runs SET state='queued',executor_id=NULL,lease_expires_at=NULL WHERE id=$1",
-        [run["id"]]
+        "UPDATE runs SET state='queued',executor_id=CASE WHEN $2 THEN executor_id ELSE NULL END,lease_expires_at=NULL,snapshot=$3 WHERE id=$1",
+        [run["id"], resumable, snapshot]
       )
 
       %{state: "queued"}
@@ -714,6 +840,10 @@ defmodule DevOrchestrator.Runs do
         "outcome" => "completed_no_changes"
       })
     )
+  end
+
+  defp transition(run, "report", data) do
+    finish(run, "succeeded", Map.merge(data, %{"outcome" => "investigation_complete"}))
   end
 
   defp transition(run, _, _) do
