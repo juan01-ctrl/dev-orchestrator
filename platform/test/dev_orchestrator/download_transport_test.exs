@@ -156,6 +156,39 @@ defmodule DevOrchestrator.DownloadTransportTest do
     refute File.exists?(path)
   end
 
+  test "the streamed transcription multipart length matches the bytes sent" do
+    Application.put_env(:dev_orchestrator, :openai, api_key: "test-openai-token")
+
+    real_transport(fn conn ->
+      case conn.host do
+        "slack.com" -> Req.Test.json(conn, %{"ok" => true, "file" => audio_metadata()})
+        "files.slack.com" -> binary_response(conn, "audio/wav", @wav)
+        "api.openai.com" -> Req.Test.json(conn, %{"text" => "Corregir el botón."})
+      end
+    end)
+
+    transport = Application.fetch_env!(:dev_orchestrator, :provider_transport)
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      if opts[:url] == "https://api.openai.com/v1/audio/transcriptions" do
+        multipart = Req.Utils.encode_form_multipart(opts[:form_multipart])
+        bytes = multipart.body |> Enum.to_list() |> IO.iodata_to_binary()
+        assert byte_size(bytes) == multipart.size
+        assert bytes =~ "filename=\"audio.wav\""
+        assert bytes =~ @wav
+        assert opts[:receive_timeout] == 120_000
+        assert opts[:retry] == false
+      end
+
+      transport.(opts)
+    end)
+
+    assert {:ok, "Corregir el botón."} =
+             Slack.with_audio("test-slack-token", "F-audio", fn path, metadata ->
+               OpenAI.transcribe(path, metadata.type)
+             end)
+  end
+
   test "native clip handling does not bypass HTTP integrity or file validation" do
     for {subtype, body, content_type, length} <- [
           {nil, @mp4, "video/mp4", 24},
@@ -300,6 +333,113 @@ defmodule DevOrchestrator.DownloadTransportTest do
       refute log =~ "private-header-value"
       refute log =~ "test-slack-token"
     end
+  end
+
+  test "OpenAI failures report HTTP status and allowlisted codes without private error details" do
+    Application.put_env(:dev_orchestrator, :openai, api_key: "test-openai-token")
+
+    for {status, code, category, logged_code} <- [
+          {401, "invalid_api_key", :provider_authentication, "invalid_api_key"},
+          {429, "insufficient_quota", :provider_rate_limit, "insufficient_quota"},
+          {503, "server_error", :provider_unavailable, "server_error"},
+          {404, "model_not_found", :provider_rejected, "model_not_found"},
+          {500, "private-provider-code", :provider_unavailable, "other"}
+        ] do
+      real_transport(fn conn ->
+        case conn.host do
+          "slack.com" ->
+            Req.Test.json(conn, %{"ok" => true, "file" => audio_metadata()})
+
+          "files.slack.com" ->
+            binary_response(conn, "audio/wav", @wav)
+
+          "api.openai.com" ->
+            conn
+            |> Plug.Conn.put_status(status)
+            |> Req.Test.json(%{
+              "error" => %{"code" => code, "message" => "private-provider-body"}
+            })
+        end
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, ^category} =
+                   Slack.with_audio("test-slack-token", "F-audio", fn path, metadata ->
+                     OpenAI.transcribe(path, metadata.type)
+                   end)
+        end)
+
+      assert log =~ "provider=openai stage=transcription kind=http"
+      assert log =~ "status=#{status} code=#{logged_code}"
+      assert log =~ "elapsed_ms="
+      refute log =~ "private-provider"
+      refute log =~ "test-openai-token"
+    end
+  end
+
+  test "OpenAI transport failures identify timeout or TLS without exposing transport details" do
+    Application.put_env(:dev_orchestrator, :openai, api_key: "test-openai-token")
+
+    for {reason, logged_reason} <- [
+          {:timeout, "timeout"},
+          {{:tls_alert, {:unknown_ca, "private-tls-detail"}}, "tls_alert"},
+          {"private-transport-detail", "other"}
+        ] do
+      real_transport(fn conn ->
+        case conn.host do
+          "slack.com" -> Req.Test.json(conn, %{"ok" => true, "file" => audio_metadata()})
+          "files.slack.com" -> binary_response(conn, "audio/wav", @wav)
+        end
+      end)
+
+      download_transport = Application.fetch_env!(:dev_orchestrator, :provider_transport)
+
+      Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+        if opts[:url] == "https://api.openai.com/v1/audio/transcriptions" do
+          {:error, %Req.TransportError{reason: reason}}
+        else
+          download_transport.(opts)
+        end
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :provider_unavailable} =
+                   Slack.with_audio("test-slack-token", "F-audio", fn path, metadata ->
+                     OpenAI.transcribe(path, metadata.type)
+                   end)
+        end)
+
+      assert log =~ "provider=openai stage=transcription kind=transport"
+      assert log =~ "reason=#{logged_reason}"
+      refute log =~ "private-"
+      refute log =~ "test-openai-token"
+    end
+  end
+
+  test "OpenAI local exceptions identify their class without exposing exception messages" do
+    Application.put_env(:dev_orchestrator, :openai, api_key: "test-openai-token")
+
+    real_transport(fn conn ->
+      case conn.host do
+        "slack.com" -> Req.Test.json(conn, %{"ok" => true, "file" => audio_metadata()})
+        "files.slack.com" -> binary_response(conn, "audio/wav", @wav)
+        "api.openai.com" -> raise ArgumentError, "private-exception-detail"
+      end
+    end)
+
+    log =
+      capture_log(fn ->
+        assert {:error, :provider_unavailable} =
+                 Slack.with_audio("test-slack-token", "F-audio", fn path, metadata ->
+                   OpenAI.transcribe(path, metadata.type)
+                 end)
+      end)
+
+    assert log =~ "provider=openai stage=transcription kind=exception"
+    assert log =~ "exception=ArgumentError"
+    refute log =~ "private-exception-detail"
   end
 
   test "download exceptions identify the provider and exception class without exposing request details" do
