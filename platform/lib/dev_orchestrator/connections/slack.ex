@@ -67,7 +67,14 @@ defmodule DevOrchestrator.Connections.Slack do
         {:error, :invalid_file_url}
 
       true ->
-        {:ok, %{type: type, size: size, url: url, name: safe_audio_name(file["name"], type)}}
+        {:ok,
+         %{
+           type: type,
+           size: size,
+           url: url,
+           name: safe_audio_name(file["name"], type),
+           native_audio: file["subtype"] == "slack_audio"
+         }}
     end
   end
 
@@ -92,7 +99,6 @@ defmodule DevOrchestrator.Connections.Slack do
           Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
       )
 
-    expected_size = metadata.size
     {:ok, io} = File.open(path, [:write, :binary, :exclusive])
 
     try do
@@ -128,9 +134,9 @@ defmodule DevOrchestrator.Connections.Slack do
                  into: collector,
                  raw: true
                ),
-             :ok <- validate_audio_download(response, expected_size) do
+             {:ok, downloaded_metadata} <- validate_audio_download(response, metadata) do
           :ok = :file.sync(io)
-          callback.(path, Map.drop(metadata, [:url]))
+          callback.(path, Map.drop(downloaded_metadata, [:url, :native_audio]))
         else
           {:error, _} = error -> error
         end
@@ -142,9 +148,12 @@ defmodule DevOrchestrator.Connections.Slack do
     end
   end
 
-  defp validate_audio_download(response, expected_size) do
+  defp validate_audio_download(response, metadata) do
     private = response.private || %{}
     received_size = Map.get(private, :slack_audio_size, 0)
+    expected_size = metadata.size
+    native_mp4 = native_mp4?(response, metadata)
+    download_size = if native_mp4, do: received_size, else: expected_size
 
     cond do
       Map.get(private, :slack_audio_too_large, false) ->
@@ -153,10 +162,10 @@ defmodule DevOrchestrator.Connections.Slack do
       response.status != 200 ->
         invalid_audio_download(response, expected_size, received_size, "unexpected_status")
 
-      received_size != expected_size ->
+      received_size != expected_size and not native_mp4 ->
         invalid_audio_download(response, expected_size, received_size, "size_mismatch")
 
-      verify_audio_content_length(response.headers || %{}, expected_size) != :ok ->
+      verify_audio_content_length(response.headers || %{}, download_size) != :ok ->
         invalid_audio_download(
           response,
           expected_size,
@@ -165,8 +174,37 @@ defmodule DevOrchestrator.Connections.Slack do
         )
 
       true ->
-        :ok
+        if native_mp4 do
+          {:ok,
+           %{
+             metadata
+             | type: "mp4",
+               size: received_size,
+               name: Path.rootname(metadata.name) <> ".mp4"
+           }}
+        else
+          {:ok, metadata}
+        end
     end
+  end
+
+  defp native_mp4?(response, metadata) do
+    content_type =
+      (response.headers || %{}) |> Map.get("content-type", []) |> List.wrap() |> List.first()
+
+    media_type =
+      if is_binary(content_type),
+        do:
+          content_type
+          |> String.split(";", parts: 2)
+          |> hd()
+          |> String.trim()
+          |> String.downcase()
+
+    prefix = Map.get(response.private || %{}, :slack_audio_prefix, "")
+
+    metadata.native_audio and media_type in ["audio/mp4", "video/mp4", "audio/x-m4a"] and
+      audio_format(prefix) == "mp4"
   end
 
   defp invalid_audio_download(response, expected_size, received_size, reason) do

@@ -10,6 +10,7 @@ defmodule DevOrchestrator.DownloadTransportTest do
   @wav <<"RIFF", 40::little-32, "WAVEfmt ", 16::little-32, 1::little-16, 1::little-16,
          8_000::little-32, 16_000::little-32, 2::little-16, 16::little-16, "data", 4::little-32,
          0::little-16, 0::little-16>>
+  @mp4 <<24::32, "ftypM4A ", 0::32, "M4A ", "isom">>
 
   setup do
     old_transport = Application.get_env(:dev_orchestrator, :provider_transport)
@@ -109,6 +110,78 @@ defmodule DevOrchestrator.DownloadTransportTest do
     assert normalized["title"] == "Corregir el botón"
     assert_receive {:downloaded_audio, path}
     refute File.exists?(path)
+  end
+
+  test "native Slack clips use the downloaded MP4 format and size for transcription" do
+    Application.put_env(:dev_orchestrator, :openai, api_key: "test-openai-token")
+    body = @mp4 <> :binary.copy(<<0>>, 38_934 - byte_size(@mp4))
+
+    real_transport(fn conn ->
+      case conn.host do
+        "slack.com" ->
+          metadata =
+            Map.merge(audio_metadata(), %{
+              "subtype" => "slack_audio",
+              "filetype" => "webm",
+              "name" => "audio_message.webm",
+              "size" => 70_365
+            })
+
+          Req.Test.json(conn, %{"ok" => true, "file" => metadata})
+
+        "files.slack.com" ->
+          binary_response(conn, "video/mp4", body)
+
+        "api.openai.com" ->
+          assert conn.request_path == "/v1/audio/transcriptions"
+
+          assert %Plug.Upload{filename: "audio.mp4", content_type: "audio/mp4", path: path} =
+                   conn.body_params["file"]
+
+          assert File.read!(path) == body
+          Req.Test.json(conn, %{"text" => "Corregir el botón."})
+      end
+    end)
+
+    assert {:ok, "Corregir el botón."} =
+             Slack.with_audio("test-slack-token", "F-audio", fn path, metadata ->
+               assert metadata.type == "mp4"
+               assert metadata.size == 38_934
+               assert metadata.name == "audio_message.mp4"
+               send(self(), {:downloaded_clip, path})
+               OpenAI.transcribe(path, metadata.type)
+             end)
+
+    assert_receive {:downloaded_clip, path}
+    refute File.exists?(path)
+  end
+
+  test "native clip handling does not bypass HTTP integrity or file validation" do
+    for {subtype, body, content_type, length} <- [
+          {nil, @mp4, "video/mp4", 24},
+          {"slack_audio", "<html>not audio</html>", "text/html", 21},
+          {"slack_audio", @mp4, "text/html", 24},
+          {"slack_audio", @mp4, "video/mp4", 25}
+        ] do
+      real_transport(fn conn ->
+        case conn.host do
+          "slack.com" ->
+            metadata = Map.merge(audio_metadata(), %{"subtype" => subtype, "size" => 100})
+            Req.Test.json(conn, %{"ok" => true, "file" => metadata})
+
+          "files.slack.com" ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", content_type)
+            |> Plug.Conn.put_resp_header("content-length", Integer.to_string(length))
+            |> Plug.Conn.send_resp(200, body)
+        end
+      end)
+
+      assert {:error, :invalid_provider_response} =
+               Slack.with_audio("test-slack-token", "F-audio", fn _, _ ->
+                 flunk("invalid downloads must not reach transcription")
+               end)
+    end
   end
 
   test "real Req does not follow a Linear redirect with provider credentials" do
