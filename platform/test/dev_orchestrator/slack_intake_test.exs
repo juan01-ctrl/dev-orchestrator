@@ -1,5 +1,6 @@
 defmodule DevOrchestrator.SlackIntakeTest do
   use DevOrchestrator.DataCase
+  import ExUnit.CaptureLog
   alias DevOrchestrator.{Intake.Inbox, Intake.SlackDrafts, Store}
 
   setup do
@@ -114,6 +115,87 @@ defmodule DevOrchestrator.SlackIntakeTest do
            ) == %{
              "state" => "received",
              "error_category" => "linear_not_configured"
+           }
+  end
+
+  test "a mention without audio posts the usage reply and releases the processing claim",
+       context do
+    previous_transport = Application.get_env(:dev_orchestrator, :provider_transport)
+    on_exit(fn -> restore_provider_transport(previous_transport) end)
+    store_token(context.scope, context.slack_connection_id, "slack-token")
+
+    body = Jason.encode!(slack_payload("Ev-usage-reply", "T1", "C1", []))
+    assert {:ok, :accepted} = Inbox.accept_slack(body)
+    assert :processed = Inbox.process_one()
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      case opts[:url] do
+        "https://slack.com/api/chat.postMessage" ->
+          assert opts[:json][:client_msg_id] =~
+                   ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z/
+
+          {:ok, %{status: 200, body: %{"ok" => true, "ts" => "2.3"}}}
+
+        "https://slack.com/api/chat.update" ->
+          {:ok, %{status: 200, body: %{"ok" => true}}}
+      end
+    end)
+
+    capture_log(fn -> assert :processed = SlackDrafts.process_one() end)
+
+    assert Store.one(
+             "SELECT state,error_category,claimed_at,slack_progress_message_ts FROM slack_task_drafts WHERE event_id='Ev-usage-reply'"
+           ) == %{
+             "state" => "failed",
+             "error_category" => "audio_required",
+             "claimed_at" => nil,
+             "slack_progress_message_ts" => "2.3"
+           }
+  end
+
+  test "a Slack transport exception after retries marks the draft failed instead of leaving it claimed",
+       context do
+    previous_transport = Application.get_env(:dev_orchestrator, :provider_transport)
+    on_exit(fn -> restore_provider_transport(previous_transport) end)
+
+    store_token(context.scope, context.slack_connection_id, "slack-token")
+
+    event = %{
+      "event_id" => "Ev-provider-exception",
+      "workspace_id" => "T1",
+      "channel_id" => "C1",
+      "requester_slack_user_id" => "U1",
+      "message_ts" => "1.2",
+      "thread_ts" => "1.2",
+      "text" => "Make a task",
+      "file_ids" => ["F1"]
+    }
+
+    assert {:ok, :created} = SlackDrafts.accept(event)
+
+    Store.exec(
+      "UPDATE slack_task_drafts SET attempts=5,error_category='provider_unavailable' WHERE event_id=$1",
+      [event["event_id"]]
+    )
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn _opts ->
+      raise "private transport detail"
+    end)
+
+    log = capture_log(fn -> assert :processed = SlackDrafts.process_one() end)
+
+    assert log =~ "Slack task draft processing failed"
+    assert log =~ "slack_progress_message"
+    assert log =~ "RuntimeError"
+    refute log =~ "private transport detail"
+
+    assert Store.one(
+             "SELECT state,error_category,claimed_at FROM slack_task_drafts WHERE event_id=$1",
+             [event["event_id"]]
+           ) == %{
+             "state" => "failed",
+             "error_category" => "provider_unavailable",
+             "claimed_at" => nil
            }
   end
 
@@ -312,4 +394,10 @@ defmodule DevOrchestrator.SlackIntakeTest do
 
     Store.exec("UPDATE connections SET secret=$2 WHERE id=$1", [connection_id, secret])
   end
+
+  defp restore_provider_transport(nil),
+    do: Application.delete_env(:dev_orchestrator, :provider_transport)
+
+  defp restore_provider_transport(transport),
+    do: Application.put_env(:dev_orchestrator, :provider_transport, transport)
 end

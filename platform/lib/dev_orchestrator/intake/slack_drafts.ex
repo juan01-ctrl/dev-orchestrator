@@ -1,4 +1,5 @@
 defmodule DevOrchestrator.Intake.SlackDrafts do
+  require Logger
   import Bitwise
   alias DevOrchestrator.{Connections, Store}
   alias DevOrchestrator.Connections.{OpenAI, Slack}
@@ -337,12 +338,15 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   end
 
   defp process_received(row) do
-    with {:ok, token} <- slack_token(row),
-         {:ok, progress_ts} <- post_progress(token, row),
+    with {:ok, token} <- logged_step("slack_credentials", fn -> slack_token(row) end),
+         {:ok, progress_ts} <-
+           logged_step("slack_progress_message", fn -> post_progress(token, row) end),
          :ok <- save_progress(row, progress_ts),
-         {:ok, {transcript, draft}} <- build_task(row, token),
+         {:ok, {transcript, draft}} <-
+           logged_step("audio_transcription_and_task_draft", fn -> build_task(row, token) end),
          :ok <- persist_draft(row, transcript, draft),
-         {:ok, message_ts} <- post_draft(token, row, draft),
+         {:ok, message_ts} <-
+           logged_step("slack_draft_message", fn -> post_draft(token, row, draft) end),
          :ok <- await_confirmation(row, message_ts) do
       :processed
     else
@@ -350,7 +354,37 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       _ -> handle_processing_error(row, :invalid_provider_response)
     end
   rescue
-    _ -> handle_processing_error(row, :provider_unavailable)
+    exception ->
+      Logger.warning(
+        "Slack task draft processing failed; recovering its durable state. " <>
+          "step=processing category=provider_unavailable exception=#{inspect(exception.__struct__)}"
+      )
+
+      retry_or_fail(row, "provider_unavailable")
+  end
+
+  defp logged_step(step, operation) do
+    case operation.() do
+      {:error, category} ->
+        logged_category = safe_category(category)
+
+        Logger.warning(
+          "Slack task draft processing failed; step=#{step} category=#{logged_category}"
+        )
+
+        {:error, category}
+
+      result ->
+        result
+    end
+  rescue
+    exception ->
+      Logger.warning(
+        "Slack task draft processing failed; step=#{step} " <>
+          "category=provider_unavailable exception=#{inspect(exception.__struct__)}"
+      )
+
+      {:error, :provider_unavailable}
   end
 
   defp build_task(%{"error_category" => "audio_required"}, _token), do: {:error, :audio_required}
@@ -363,14 +397,19 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
          {:ok, project} <- project_for(row),
          {:ok, {transcript, draft}} <-
            Slack.with_audio(token, row["file_id"], fn path, metadata ->
-             with {:ok, transcript} <- OpenAI.transcribe(path, metadata.type),
+             with {:ok, transcript} <-
+                    logged_step("openai_transcription", fn ->
+                      OpenAI.transcribe(path, metadata.type)
+                    end),
                   {:ok, raw_draft} <-
-                    OpenAI.structure_task(%{
-                      transcript: transcript,
-                      message: row["message_text"] || "",
-                      project_name: project["name"],
-                      project_instructions: project["instructions"]
-                    }),
+                    logged_step("openai_task_draft", fn ->
+                      OpenAI.structure_task(%{
+                        transcript: transcript,
+                        message: row["message_text"] || "",
+                        project_name: project["name"],
+                        project_instructions: project["instructions"]
+                      })
+                    end),
                   {:ok, draft} <- TaskDraft.normalize(raw_draft) do
                {:ok, {transcript, draft}}
              end
@@ -560,7 +599,8 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   end
 
   defp deterministic_uuid(value) do
-    <<first::binary-size(6), version, second::binary-size(1), variant, rest::binary-size(7)>> =
+    <<first::binary-size(6), version, second::binary-size(1), variant, rest::binary-size(7),
+      _::binary>> =
       :crypto.hash(:sha256, value)
 
     bytes =
