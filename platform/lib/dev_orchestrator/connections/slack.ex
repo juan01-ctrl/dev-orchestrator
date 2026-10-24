@@ -108,9 +108,16 @@ defmodule DevOrchestrator.Connections.Slack do
             %{response | private: Map.put(response_private, :slack_audio_too_large, true)}}}
         else
           :ok = IO.binwrite(io, chunk)
+          prefix = Map.get(response_private, :slack_audio_prefix, "")
+          remaining = 64 - byte_size(prefix)
+          prefix = prefix <> binary_part(chunk, 0, min(remaining, byte_size(chunk)))
 
-          {:cont,
-           {request, %{response | private: Map.put(response_private, :slack_audio_size, size)}}}
+          response_private =
+            response_private
+            |> Map.put(:slack_audio_size, size)
+            |> Map.put(:slack_audio_prefix, prefix)
+
+          {:cont, {request, %{response | private: response_private}}}
         end
       end
 
@@ -144,14 +151,14 @@ defmodule DevOrchestrator.Connections.Slack do
         {:error, :file_too_large}
 
       response.status != 200 ->
-        invalid_audio_download(response.status, expected_size, received_size, "unexpected_status")
+        invalid_audio_download(response, expected_size, received_size, "unexpected_status")
 
       received_size != expected_size ->
-        invalid_audio_download(response.status, expected_size, received_size, "size_mismatch")
+        invalid_audio_download(response, expected_size, received_size, "size_mismatch")
 
       verify_audio_content_length(response.headers || %{}, expected_size) != :ok ->
         invalid_audio_download(
-          response.status,
+          response,
           expected_size,
           received_size,
           "content_length_mismatch"
@@ -162,13 +169,42 @@ defmodule DevOrchestrator.Connections.Slack do
     end
   end
 
-  defp invalid_audio_download(status, expected_size, received_size, reason) do
+  defp invalid_audio_download(response, expected_size, received_size, reason) do
+    prefix = Map.get(response.private || %{}, :slack_audio_prefix, "")
+
+    content_type =
+      (response.headers || %{}) |> Map.get("content-type", []) |> List.wrap() |> List.first()
+
+    media_type =
+      case content_type do
+        "audio/" <> _ -> "audio"
+        "video/" <> _ -> "video"
+        "text/html" <> _ -> "html"
+        "application/json" <> _ -> "json"
+        "application/octet-stream" -> "binary"
+        nil -> "missing"
+        _ -> "other"
+      end
+
     Logger.warning(
       "File processing failed; provider=slack stage=audio_download reason=#{reason} " <>
-        "status=#{status} expected_bytes=#{expected_size} received_bytes=#{received_size}"
+        "status=#{response.status} expected_bytes=#{expected_size} received_bytes=#{received_size} " <>
+        "media_type=#{media_type} detected_format=#{audio_format(prefix)}"
     )
 
     {:error, :invalid_provider_response}
+  end
+
+  defp audio_format(<<_::32, "ftyp", _::binary>>), do: "mp4"
+  defp audio_format(<<"RIFF", _::32, "WAVE", _::binary>>), do: "wav"
+  defp audio_format(<<0x1A, 0x45, 0xDF, 0xA3, _::binary>>), do: "webm"
+  defp audio_format(<<"ID3", _::binary>>), do: "mp3"
+  defp audio_format(<<0x1F, 0x8B, _::binary>>), do: "gzip"
+
+  defp audio_format(prefix) do
+    if Regex.match?(~r/^\s*<(?:!doctype\b|html\b|head\b|body\b)/i, prefix),
+      do: "html",
+      else: "unknown"
   end
 
   defp verify_audio_content_length(headers, size) do

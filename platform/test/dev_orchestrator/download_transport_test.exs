@@ -194,6 +194,41 @@ defmodule DevOrchestrator.DownloadTransportTest do
     end
   end
 
+  test "Slack download diagnostics distinguish media from HTML without exposing bytes or headers" do
+    for {body, content_type, format, media_type} <- [
+          {<<24::32, "ftypM4A ", 0::32>>, "video/mp4", "mp4", "video"},
+          {@wav, "audio/wav", "wav", "audio"},
+          {<<0x1A, 0x45, 0xDF, 0xA3, 0, 0>>, "audio/webm", "webm", "audio"},
+          {"  <!DOCTYPE html><html>private-body</html>", "text/html", "html", "html"},
+          {<<255, 0, 254, 1>>, "private-header-value", "unknown", "other"}
+        ] do
+      real_transport(fn conn ->
+        case conn.host do
+          "slack.com" ->
+            metadata = Map.put(audio_metadata(), "size", 100)
+            Req.Test.json(conn, %{"ok" => true, "file" => metadata})
+
+          "files.slack.com" ->
+            binary_response(conn, content_type, body)
+        end
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :invalid_provider_response} =
+                   Slack.with_audio("test-slack-token", "F-audio", fn _, _ ->
+                     flunk("diagnostics must not bypass download validation")
+                   end)
+        end)
+
+      assert log =~ "detected_format=#{format}"
+      assert log =~ "media_type=#{media_type}"
+      refute log =~ "private-body"
+      refute log =~ "private-header-value"
+      refute log =~ "test-slack-token"
+    end
+  end
+
   test "download exceptions identify the provider and exception class without exposing request details" do
     Application.put_env(:dev_orchestrator, :provider_transport, fn _opts ->
       raise ArgumentError, "private-token-and-source-url"
