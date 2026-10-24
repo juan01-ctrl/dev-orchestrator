@@ -1,5 +1,5 @@
-# Pure security/protocol checks only. This is not a substitute for mix test + PostgreSQL.
-for app <- ~w(jason req),
+# Checks without PostgreSQL or provider network access. Not a substitute for mix test.
+for app <- ~w(jason req plug mime plug_crypto telemetry),
     profile <- ~w(test dev),
     path = "_build/#{profile}/lib/#{app}/ebin",
     File.dir?(path),
@@ -13,5 +13,5 @@ end
 ExUnit.start()
 
 for name <-
-      ~w(policy runtime_config execution_policy secret_box failure_budget event verification webhook provider intake task_draft linear_assets runs_lifecycle delivery_retry),
+      ~w(policy runtime_config execution_policy secret_box failure_budget event verification webhook provider intake task_draft linear_assets runs_lifecycle delivery_retry download_transport),
     do: Code.require_file("test/dev_orchestrator/#{name}_test.exs")

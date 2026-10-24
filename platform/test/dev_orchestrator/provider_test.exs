@@ -515,8 +515,8 @@ defmodule DevOrchestrator.ProviderTest do
       assert opts[:receive_timeout] == 15_000
       assert {"authorization", "Bearer linear-private-token"} in opts[:headers]
       assert {"accept-encoding", "identity"} in opts[:headers]
-      assert opts[:decode_body] == false
-      assert opts[:decompress_body] == false
+      assert opts[:raw] == true
+      assert %Req.Request{} = Req.new(opts)
       assert is_function(opts[:into], 2)
 
       response = %{

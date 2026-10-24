@@ -1,4 +1,5 @@
 defmodule DevOrchestrator.Connections.Slack do
+  require Logger
   alias DevOrchestrator.Connections.HTTP
 
   @channel_page_limit 200
@@ -33,7 +34,13 @@ defmodule DevOrchestrator.Connections.Slack do
         error
     end
   rescue
-    _ -> {:error, :provider_unavailable}
+    exception ->
+      Logger.warning(
+        "File processing failed; provider=slack stage=audio_download_or_processing " <>
+          "exception=#{inspect(exception.__struct__)}"
+      )
+
+      {:error, :provider_unavailable}
   end
 
   def with_audio(_, _, _), do: {:error, :invalid_file}
@@ -112,8 +119,7 @@ defmodule DevOrchestrator.Connections.Slack do
                HTTP.request_response(:get, metadata.url,
                  headers: [{"authorization", "Bearer " <> token}, {"accept-encoding", "identity"}],
                  into: collector,
-                 decode_body: false,
-                 decompress_body: false
+                 raw: true
                ),
              false <- Map.get(response.private || %{}, :slack_audio_too_large, false),
              ^expected_size <- Map.get(response.private || %{}, :slack_audio_size, 0),

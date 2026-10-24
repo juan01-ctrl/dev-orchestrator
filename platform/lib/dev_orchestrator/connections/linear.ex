@@ -1,4 +1,5 @@
 defmodule DevOrchestrator.Connections.Linear do
+  require Logger
   alias DevOrchestrator.Connections.HTTP
 
   @max_file_bytes 10 * 1_024 * 1_024
@@ -208,8 +209,7 @@ defmodule DevOrchestrator.Connections.Linear do
            HTTP.request_response(:get, source_url,
              headers: [{"authorization", "Bearer " <> token}, {"accept-encoding", "identity"}],
              into: collector,
-             decode_body: false,
-             decompress_body: false
+             raw: true
            ),
          false <- Map.get(response.private || %{}, :linear_asset_too_large, false),
          body <-
@@ -239,7 +239,13 @@ defmodule DevOrchestrator.Connections.Linear do
       _ -> {:error, :unsupported_file}
     end
   rescue
-    _ -> {:error, :provider_unavailable}
+    exception ->
+      Logger.warning(
+        "File processing failed; provider=linear stage=asset_download " <>
+          "exception=#{inspect(exception.__struct__)}"
+      )
+
+      {:error, :provider_unavailable}
   end
 
   defp validate_file(body, headers) when is_binary(body) do
