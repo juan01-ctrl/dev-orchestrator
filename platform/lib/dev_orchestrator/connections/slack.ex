@@ -115,21 +115,17 @@ defmodule DevOrchestrator.Connections.Slack do
       end
 
       result =
-        with {:ok, %{status: 200} = response} <-
+        with {:ok, response} <-
                HTTP.request_response(:get, metadata.url,
                  headers: [{"authorization", "Bearer " <> token}, {"accept-encoding", "identity"}],
                  into: collector,
                  raw: true
                ),
-             false <- Map.get(response.private || %{}, :slack_audio_too_large, false),
-             ^expected_size <- Map.get(response.private || %{}, :slack_audio_size, 0),
-             :ok <- verify_audio_content_length(response.headers || %{}, metadata.size) do
+             :ok <- validate_audio_download(response, expected_size) do
           :ok = :file.sync(io)
           callback.(path, Map.drop(metadata, [:url]))
         else
-          true -> {:error, :file_too_large}
           {:error, _} = error -> error
-          _ -> {:error, :invalid_provider_response}
         end
 
       result
@@ -137,6 +133,42 @@ defmodule DevOrchestrator.Connections.Slack do
       File.close(io)
       File.rm(path)
     end
+  end
+
+  defp validate_audio_download(response, expected_size) do
+    private = response.private || %{}
+    received_size = Map.get(private, :slack_audio_size, 0)
+
+    cond do
+      Map.get(private, :slack_audio_too_large, false) ->
+        {:error, :file_too_large}
+
+      response.status != 200 ->
+        invalid_audio_download(response.status, expected_size, received_size, "unexpected_status")
+
+      received_size != expected_size ->
+        invalid_audio_download(response.status, expected_size, received_size, "size_mismatch")
+
+      verify_audio_content_length(response.headers || %{}, expected_size) != :ok ->
+        invalid_audio_download(
+          response.status,
+          expected_size,
+          received_size,
+          "content_length_mismatch"
+        )
+
+      true ->
+        :ok
+    end
+  end
+
+  defp invalid_audio_download(status, expected_size, received_size, reason) do
+    Logger.warning(
+      "File processing failed; provider=slack stage=audio_download reason=#{reason} " <>
+        "status=#{status} expected_bytes=#{expected_size} received_bytes=#{received_size}"
+    )
+
+    {:error, :invalid_provider_response}
   end
 
   defp verify_audio_content_length(headers, size) do

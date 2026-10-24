@@ -156,6 +156,44 @@ defmodule DevOrchestrator.DownloadTransportTest do
     refute File.exists?(path)
   end
 
+  test "Slack reports download validation failures without logging private response data" do
+    for {status, body, length, reason} <- [
+          {206, @wav, byte_size(@wav), "unexpected_status"},
+          {200, "private-response-body", 21, "size_mismatch"},
+          {200, @wav, 999, "content_length_mismatch"}
+        ] do
+      real_transport(fn conn ->
+        case conn.host do
+          "slack.com" ->
+            Req.Test.json(conn, %{"ok" => true, "file" => audio_metadata()})
+
+          "files.slack.com" ->
+            conn
+            |> Plug.Conn.put_resp_header("content-type", "audio/wav")
+            |> Plug.Conn.put_resp_header("content-length", Integer.to_string(length))
+            |> Plug.Conn.send_resp(status, body)
+        end
+      end)
+
+      log =
+        capture_log(fn ->
+          assert {:error, :invalid_provider_response} =
+                   Slack.with_audio("test-slack-token", "F-audio", fn _, _ ->
+                     flunk("invalid downloads must not reach transcription")
+                   end)
+        end)
+
+      assert log =~ "provider=slack stage=audio_download"
+      assert log =~ "reason=#{reason}"
+      assert log =~ "status=#{status}"
+      assert log =~ "expected_bytes=48"
+      assert log =~ "received_bytes=#{byte_size(body)}"
+      refute log =~ "private-response-body"
+      refute log =~ "test-slack-token"
+      refute log =~ "/private/audio.wav"
+    end
+  end
+
   test "download exceptions identify the provider and exception class without exposing request details" do
     Application.put_env(:dev_orchestrator, :provider_transport, fn _opts ->
       raise ArgumentError, "private-token-and-source-url"
