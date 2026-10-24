@@ -67,6 +67,22 @@ designated test project. Use a non-production channel and Linear project.
 Slack app reinstallation, provider calls, Render secret changes, and deployment
 are owner-authorized operations and are not part of source implementation.
 
+### Delivered PR follow-ups
+
+1. Complete a workflow-v2 task and verify its new Slack report includes follow-up guidance.
+2. Mention the bot in that report's thread with a text adjustment. Verify it proposes
+   only that adjustment and does not create another Linear issue or execute before approval.
+3. Revise the proposal using audio, then text; confirm pending audio is retained and
+   the old button cannot apply it. A different requester must not confirm the draft.
+4. Approve it and verify the same executor/conversation, task branch, and PR are
+   reused, checks run, and the final report replies in the original report thread.
+5. Request a second adjustment; replay the first event/button and confirm no duplicate
+   continuation or new Linear issue. Verify the original Linear issue stays linked.
+6. Close/merge the PR, change its head, revoke/unbind the executor or advance the run's
+   lifecycle between proposal and approval. Verify a clear refusal and no overwrite,
+   new branch, replacement PR, or silently renewed proposal.
+7. An unknown or pre-migration report thread must not create a new Linear task.
+
 ## Publication
 
 Do not publish as a completed product until the deployment gates above pass.

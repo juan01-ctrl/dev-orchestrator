@@ -5,6 +5,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   alias DevOrchestrator.Connections.{OpenAI, Slack}
   alias DevOrchestrator.Connections.Linear
   alias DevOrchestrator.Intake.TaskDraft
+  alias DevOrchestrator.Runs.SlackFollowups
 
   @max_attempts 5
 
@@ -23,6 +24,47 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   def accept(_), do: {:ok, :ignored}
 
   defp accept_in_scope(event, project, slack_connection) do
+    target = SlackFollowups.target(project, event)
+
+    duplicate =
+      Store.one(
+        "SELECT id FROM slack_task_drafts WHERE event_id=$1 UNION ALL SELECT draft_id AS id FROM slack_draft_inputs WHERE event_id=$1 LIMIT 1",
+        [event["event_id"]]
+      )
+
+    cond do
+      duplicate -> {:ok, :duplicate}
+      target -> accept_followup(event, project, slack_connection, target)
+      true -> accept_initial(event, project, slack_connection)
+    end
+  end
+
+  defp accept_followup(event, project, connection, target) do
+    previous =
+      Store.one(
+        "SELECT *,(expires_at IS NULL OR expires_at>now()) AS revision_not_expired FROM slack_task_drafts WHERE organization_id=$1 AND target_run_id=$2 AND state IN ('received','processing','awaiting_confirmation','creating') ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
+        [project["organization_id"], target["run_id"]]
+      )
+
+    cond do
+      is_binary(target["requester_slack_user_id"]) and
+          target["requester_slack_user_id"] != event["requester_slack_user_id"] ->
+        {:ok, :ignored}
+
+      previous &&
+          (previous["thread_ts"] != event["thread_ts"] or
+             previous["target_lifecycle"] != target["lifecycle"]) ->
+        {:ok, :ignored}
+
+      previous ->
+        revise(previous, event)
+
+      true ->
+        insert_draft(event, project, connection, target)
+    end
+  end
+
+  defp accept_initial(event, project, slack_connection) do
     previous =
       if event["thread_ts"] != event["message_ts"] do
         Store.one(
@@ -31,17 +73,17 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
         )
       end
 
-    if previous do
-      revise(previous, event)
-    else
-      insert_draft(event, project, slack_connection)
+    cond do
+      previous -> revise(previous, event)
+      event["thread_ts"] != event["message_ts"] -> {:ok, :ignored}
+      true -> insert_draft(event, project, slack_connection)
     end
   end
 
   defp revise(previous, event) do
     valid_state =
       previous["state"] in ~w(received processing awaiting_confirmation) and
-        is_map(previous["task_draft"])
+        (is_map(previous["task_draft"]) or is_binary(previous["target_run_id"]))
 
     not_expired = previous["revision_not_expired"] == true
 
@@ -84,7 +126,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       else: file_id
   end
 
-  defp insert_draft(event, project, slack_connection) do
+  defp insert_draft(event, project, slack_connection, target \\ nil) do
     input = DevOrchestrator.Intake.Slack.task_file_id(event)
 
     linear_ready =
@@ -94,7 +136,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     error_category =
       cond do
         match?({:error, _}, input) -> "input_required"
-        not linear_ready -> "linear_not_configured"
+        not linear_ready and is_nil(target) -> "linear_not_configured"
         true -> nil
       end
 
@@ -102,7 +144,7 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     id = Store.id()
 
     case Store.one(
-           "INSERT INTO slack_task_drafts(id,event_id,organization_id,project_id,slack_connection_id,requester_slack_user_id,channel_id,thread_ts,file_id,message_text,error_category) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(event_id) DO NOTHING RETURNING id",
+           "INSERT INTO slack_task_drafts(id,event_id,organization_id,project_id,slack_connection_id,requester_slack_user_id,channel_id,thread_ts,file_id,message_text,error_category,target_run_id,target_lifecycle,target_commit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(event_id) DO NOTHING RETURNING id",
            [
              id,
              event["event_id"],
@@ -114,7 +156,10 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
              event["thread_ts"],
              file_id,
              event["text"] || "",
-             error_category
+             error_category,
+             if(target, do: target["run_id"]),
+             if(target, do: target["lifecycle"]),
+             if(target, do: target["commit"] || "")
            ]
          ) do
       %{"id" => _} -> {:ok, :created}
@@ -139,7 +184,14 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
     end
   end
 
+  def confirm(%{"action_id" => "apply_pr_followup"} = action),
+    do: transition_action(action, "apply_pr_followup", "creating")
+
   def confirm(action), do: transition_action(action, "create_linear_task", "creating")
+
+  def cancel(%{"action_id" => "cancel_pr_followup"} = action),
+    do: transition_action(action, "cancel_pr_followup", "cancelled")
+
   def cancel(action), do: transition_action(action, "cancel_linear_task", "cancelled")
 
   def create_one do
@@ -179,6 +231,10 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
             not action_matches?(row, action) ->
               {:error, :forbidden}
+
+            is_binary(row["target_run_id"]) !=
+                expected_action in ["apply_pr_followup", "cancel_pr_followup"] ->
+              {:error, :invalid_action}
 
             row["revision"] != Map.get(action, "revision", 1) ->
               {:error, :stale_draft}
@@ -233,6 +289,13 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
         )
       end
     end)
+  end
+
+  defp create_confirmed_issue(%{"target_run_id" => target} = row) when is_binary(target) do
+    case SlackFollowups.queue(row) do
+      {:ok, _} -> update_terminal_messages()
+      {:error, category} -> handle_creation_error(row, safe_category(category))
+    end
   end
 
   defp create_confirmed_issue(row) do
@@ -294,9 +357,13 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   end
 
   defp recover_ambiguous_creations do
+    Store.exec(
+      "UPDATE slack_task_drafts SET claimed_at=NULL,next_attempt_at=now(),updated_at=now() WHERE target_run_id IS NOT NULL AND state='creating' AND claimed_at<now()-interval '2 minutes'"
+    )
+
     stale =
       Store.rows(
-        "UPDATE slack_task_drafts SET state='creation_ambiguous',claimed_at=NULL,error_category='creation_ambiguous',updated_at=now() WHERE state='creating' AND claimed_at<now()-interval '2 minutes' RETURNING id"
+        "UPDATE slack_task_drafts SET state='creation_ambiguous',claimed_at=NULL,error_category='creation_ambiguous',updated_at=now() WHERE target_run_id IS NULL AND state='creating' AND claimed_at<now()-interval '2 minutes' RETURNING id"
       )
 
     if stale != [], do: update_terminal_messages()
@@ -323,6 +390,22 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       _ -> :retry
     end
   end
+
+  defp terminal_text(%{
+         "state" => "created",
+         "target_run_id" => run_id
+       })
+       when is_binary(run_id),
+       do:
+         {:ok,
+          "Approved update queued for the existing pull request. I will report the result in this thread. No new Linear task was created."}
+
+  defp terminal_text(%{"state" => "cancelled", "target_run_id" => run_id}) when is_binary(run_id),
+    do: {:ok, "PR update cancelled. The existing pull request was not changed."}
+
+  defp terminal_text(%{"state" => state, "target_run_id" => run_id} = row)
+       when is_binary(run_id) and state in ["failed", "creation_ambiguous"],
+       do: {:ok, followup_failure(row["error_category"])}
 
   defp terminal_text(%{
          "state" => "created",
@@ -465,12 +548,15 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   defp build_task(row, token) do
     with :ok <- if(OpenAI.configured?(), do: :ok, else: {:error, :not_configured}),
          {:ok, project} <- project_for(row),
+         {:ok, context} <- followup_context(row),
          {:ok, transcript} <- transcribe_audio(row, token),
          {:ok, raw_draft} <-
            logged_step("openai_task_draft", fn ->
              OpenAI.structure_task(%{
                transcript: transcript,
                previous_draft: row["task_draft"],
+               purpose: if(row["target_run_id"], do: "pr_followup", else: "linear_task"),
+               task_context: context,
                message: row["message_text"] || "",
                project_name: project["name"],
                project_instructions: project["instructions"]
@@ -480,6 +566,20 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       {:ok, {transcript, draft}}
     end
   end
+
+  defp followup_context(%{"target_run_id" => target} = row) when is_binary(target) do
+    with {:ok, run} <- SlackFollowups.context(row) do
+      {:ok,
+       %{
+         "title" => run["title"],
+         "original_request" => String.slice(run["prompt"], 0, 4_000),
+         "last_result" => String.slice(run["result"]["summary"] || "", 0, 4_000),
+         "pr_url" => run["result"]["pr_url"]
+       }}
+    end
+  end
+
+  defp followup_context(_), do: {:ok, nil}
 
   defp transcribe_audio(%{"file_id" => nil} = row, _token), do: {:ok, row["transcript"]}
 
@@ -509,8 +609,19 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
       channel: row["channel_id"],
       thread_ts: row["thread_ts"],
       client_msg_id: deterministic_uuid(row["id"] <> ":#{row["revision"]}:draft"),
-      text: "Please review the proposed Linear task and confirm or cancel.",
-      blocks: TaskDraft.to_slack_blocks(draft, row["id"], row["revision"]),
+      text:
+        if(row["target_run_id"],
+          do:
+            "Please review the proposed update to the existing PR and confirm or cancel. No new Linear task will be created.",
+          else: "Please review the proposed Linear task and confirm or cancel."
+        ),
+      blocks:
+        TaskDraft.to_slack_blocks(
+          draft,
+          row["id"],
+          row["revision"],
+          if(row["target_run_id"], do: :pr_followup, else: :linear)
+        ),
       unfurl_links: false,
       unfurl_media: false
     })
@@ -707,6 +818,9 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
 
   defp present?(value), do: is_binary(value) and value != ""
 
+  defp processing_failure_text(%{"target_run_id" => target}, category) when is_binary(target),
+    do: followup_failure(category)
+
   defp processing_failure_text(%{"error_category" => "linear_not_configured"}, _category),
     do:
       "Connect Linear and configure this project's team and project before requesting a task. No issue was created."
@@ -717,6 +831,34 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
   defp processing_failure_text(_row, _category),
     do:
       "I couldn't prepare this task draft. Please check the text or audio and project connection, then try again."
+
+  defp followup_failure("pr_closed"),
+    do:
+      "The pull request is closed or merged. I did not reopen it or create a new task. Send a new request if more work is needed."
+
+  defp followup_failure("pr_changed"),
+    do:
+      "The PR head, repository or task attempt changed after this proposal. I did not modify it. Send a new reply in the current report thread to review a fresh update."
+
+  defp followup_failure("pr_busy"),
+    do:
+      "This task is already being updated or is no longer ready for a PR follow-up. Wait for its result before requesting another adjustment."
+
+  defp followup_failure("context_expired"),
+    do:
+      "The seven-day continuation window expired. I did not restart this task without its context. Send a new task request."
+
+  defp followup_failure("executor_unavailable"),
+    do:
+      "The original executor is unavailable or no longer authorized. Restore its access and saved context before requesting a PR update."
+
+  defp followup_failure("connector_upgrade_required"),
+    do:
+      "This task was not executed with a compatible connector. Its PR cannot be resumed through this thread."
+
+  defp followup_failure(_),
+    do:
+      "I couldn't prepare or queue this PR update. Check the text or audio and project connections, then retry. No new Linear task was created."
 
   defp transient?(category), do: category in ["provider_unavailable", "provider_rate_limit"]
 
@@ -735,7 +877,14 @@ defmodule DevOrchestrator.Intake.SlackDrafts do
               :audio_required,
               :input_required,
               :not_found,
-              :state_changed
+              :state_changed,
+              :pr_closed,
+              :pr_changed,
+              :pr_busy,
+              :pr_unavailable,
+              :context_expired,
+              :executor_unavailable,
+              :connector_upgrade_required
             ],
        do: Atom.to_string(category)
 

@@ -316,7 +316,12 @@ defmodule DevOrchestrator.Connections.Slack do
         "message" => %{"ts" => message_ts},
         "actions" => [%{"action_id" => action_id, "value" => draft_id} | _]
       })
-      when action_id in ["create_linear_task", "cancel_linear_task"] and is_binary(draft_id) and
+      when action_id in [
+             "create_linear_task",
+             "cancel_linear_task",
+             "apply_pr_followup",
+             "cancel_pr_followup"
+           ] and is_binary(draft_id) and
              is_binary(workspace_id) and is_binary(channel_id) and is_binary(user_id) and
              is_binary(message_ts) do
     case String.split(draft_id, ":", parts: 2) do
@@ -425,13 +430,20 @@ defmodule DevOrchestrator.Connections.Slack do
 
   defp select_channel(_), do: []
 
-  def deliver(token, payload) do
+  def deliver(token, payload), do: deliver_result(token, payload, false)
+  def deliver_with_receipt(token, payload), do: deliver_result(token, payload, true)
+
+  defp deliver_result(token, payload, receipt?) do
     case HTTP.request(:post, "https://slack.com/api/chat.postMessage",
            headers: [{"authorization", "Bearer " <> token}],
            json: payload
          ) do
-      {:ok, %{"ok" => true}} ->
-        :ok
+      {:ok, %{"ok" => true} = response} ->
+        cond do
+          not receipt? -> :ok
+          is_binary(response["ts"]) and response["ts"] != "" -> {:ok, response["ts"]}
+          true -> :ambiguous
+        end
 
       {:ok, %{"ok" => false}} ->
         :rejected

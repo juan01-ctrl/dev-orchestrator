@@ -16,8 +16,10 @@ Code.require_file("test/dev_orchestrator/batch_test.exs")
 Code.require_file("lib/dev_orchestrator/background/worker.ex")
 Code.require_file("test/dev_orchestrator/background_worker_test.exs")
 Code.require_file("lib/dev_orchestrator/runs/pr_feedback.ex")
+Code.require_file("lib/dev_orchestrator/runs/slack_followups.ex")
 Code.require_file("test/dev_orchestrator/pr_feedback_test.exs")
 Code.require_file("test/dev_orchestrator/reconciliation_cursor_test.exs")
+Code.require_file("test/dev_orchestrator/slack_followup_contract_test.exs")
 
 for name <-
       ~w(policy runtime_config execution_policy secret_box failure_budget event verification webhook provider intake task_draft linear_assets runs_lifecycle delivery_retry download_transport),

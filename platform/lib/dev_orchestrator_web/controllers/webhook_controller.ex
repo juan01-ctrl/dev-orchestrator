@@ -72,7 +72,8 @@ defmodule DevOrchestratorWeb.WebhookController do
     end
   end
 
-  defp acknowledge_action(conn, %{"action_id" => "create_linear_task"} = action) do
+  defp acknowledge_action(conn, %{"action_id" => action_id} = action)
+       when action_id in ["create_linear_task", "apply_pr_followup"] do
     case DevOrchestrator.Intake.SlackDrafts.confirm(action) do
       {:ok, _} ->
         json(conn, %{})
@@ -101,7 +102,8 @@ defmodule DevOrchestratorWeb.WebhookController do
     end
   end
 
-  defp acknowledge_action(conn, %{"action_id" => "cancel_linear_task"} = action) do
+  defp acknowledge_action(conn, %{"action_id" => action_id} = action)
+       when action_id in ["cancel_linear_task", "cancel_pr_followup"] do
     case DevOrchestrator.Intake.SlackDrafts.cancel(action) do
       {:ok, _} ->
         json(conn, %{})

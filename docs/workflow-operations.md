@@ -57,6 +57,33 @@ confirmation/cancellation/expiry are ignored; send a new root request instead.
 Text corrections retain a pending audio correction until generation incorporates
 it. A new audio attachment replaces the previous pending audio selection.
 
+## Slack feedback on a delivered PR
+
+After migration `20261102000000_add_slack_pr_followups`, delivered Slack reports
+record a scoped thread-to-run mapping. Reply in that report's thread, mention the
+bot, and send text or one audio file. Review its proposed adjustment and click
+**Apply to PR**. The original executor resumes the same conversation and updates
+the existing branch/PR; no new Linear issue is created. The next execution report
+returns to that thread. Connector 0.2.0 already supports this continuation; this
+server-only feature does not require another npm version or Slack subscription.
+
+For tasks originally requested through Slack, only the original requester can ask
+for adjustments. Other tasks accept requests from the configured channel, as initial
+intake does. Each proposal can be revised/confirmed/cancelled only by its author.
+One open proposal per run is permitted. Text corrections retain pending audio; a
+replacement audio attachment supersedes the prior pending selection.
+
+Every proposal pins its delivered lifecycle and head. An approved proposal is
+rejected if the PR changed/closed/merged, the task is busy, its original executor
+was revoked/unbound, the connection changed, or seven days passed since delivery.
+The confirmation is separate from the opt-in three-round automatic CI repair limit;
+each explicit approval grants a new twenty-minute execution budget. Merge remains human.
+
+Older reports cannot be backfilled without history access. Unknown thread replies
+are ignored rather than accidentally creating a new Linear task. Start new tasks
+with a top-level mention. A lost/ambiguous Slack send is retained as ambiguous, not
+blindly reposted. Existing outbox diagnostics remain the recovery surface.
+
 ## Human pauses
 
 A question stores a private conversation/workspace checkpoint under the connector's

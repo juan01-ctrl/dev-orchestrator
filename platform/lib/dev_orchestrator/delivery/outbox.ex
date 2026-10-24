@@ -30,7 +30,11 @@ defmodule DevOrchestrator.Delivery.Outbox do
           provider <>
             ":" <>
             state <>
-            if((run["repair_count"] || 0) > 0, do: ":repair#{run["repair_count"]}", else: ""),
+            if((run["repair_count"] || 0) > 0, do: ":repair#{run["repair_count"]}", else: "") <>
+            if((run["followup_count"] || 0) > 0,
+              do: ":followup#{run["followup_count"]}",
+              else: ""
+            ),
           payload
         ]
       )

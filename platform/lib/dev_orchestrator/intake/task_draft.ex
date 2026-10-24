@@ -37,11 +37,15 @@ defmodule DevOrchestrator.Intake.TaskDraft do
     |> IO.iodata_to_binary()
   end
 
-  def to_slack_blocks(draft, draft_id, revision \\ 1) do
+  def to_slack_blocks(draft, draft_id, revision \\ 1, target \\ :linear) do
     value = draft_id <> ":" <> Integer.to_string(revision)
+    followup? = target == :pr_followup
 
     [
-      section("Proposed Linear task\nTitle: " <> slack_text(draft["title"])),
+      section(
+        if(followup?, do: "Proposed PR update", else: "Proposed Linear task") <>
+          "\nTitle: " <> slack_text(draft["title"])
+      ),
       section("Context\n" <> slack_text(draft["context"])),
       section("Objective\n" <> slack_text(draft["objective"])),
       section("Scope\n" <> slack_bullets(draft["scope"])),
@@ -54,14 +58,17 @@ defmodule DevOrchestrator.Intake.TaskDraft do
         elements: [
           %{
             type: "button",
-            action_id: "create_linear_task",
-            text: %{type: "plain_text", text: "Create in Linear"},
+            action_id: if(followup?, do: "apply_pr_followup", else: "create_linear_task"),
+            text: %{
+              type: "plain_text",
+              text: if(followup?, do: "Apply to PR", else: "Create in Linear")
+            },
             value: value,
             style: "primary"
           },
           %{
             type: "button",
-            action_id: "cancel_linear_task",
+            action_id: if(followup?, do: "cancel_pr_followup", else: "cancel_linear_task"),
             text: %{type: "plain_text", text: "Cancel"},
             value: value
           }

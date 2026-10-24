@@ -43,8 +43,13 @@ defmodule DevOrchestrator.Delivery.Worker do
 
     if connection do
       case Connections.credential(connection) do
-        {:ok, token} -> send_report(provider, delivery, token, row["payload"])
-        _ -> :rejected
+        {:ok, token} ->
+          if provider == "slack" and delivery != "clarification",
+            do: DevOrchestrator.Delivery.SlackReports.deliver(row, connection, token),
+            else: send_report(provider, delivery, token, row["payload"])
+
+        _ ->
+          :rejected
       end
     else
       :not_configured
