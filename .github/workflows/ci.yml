@@ -39,3 +39,36 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check
       - run: npm test
+  release-evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5433:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28'
+          elixir-version: '1.19.5'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.1'
+      - run: mix deps.get
+        working-directory: platform
+      - run: npm ci --ignore-scripts
+        working-directory: connector
+      - run: node evals/run.mjs --trials 3
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-evals
+          path: .runtime/evals/**/regression.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

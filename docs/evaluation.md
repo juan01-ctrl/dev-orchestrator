@@ -2,6 +2,84 @@
 
 This is a checklist to execute, not a claim that these checks have already passed.
 
+## Automated pre-release regression gate
+
+From the repository root, with the existing local test PostgreSQL running:
+
+```bash
+node evals/run.mjs --trials 3
+```
+
+This runs the eval harness's own tests, connector typecheck/build and the complete
+platform/connector suites three times. `evals/manifest.json` identifies 40 required
+workflow scenarios across intake, authorization, idempotency, validation,
+continuation, publication and recovery. Renamed/missing/skipped/duplicate scenarios,
+any failing native test, malformed evidence, process failure or timeout fail the
+gate. These are deterministic state/contract evals, not claims about live models.
+ExUnit seeds vary; connector repetitions exercise repeated runs but are not seeded
+model trials. Every attempt is required to pass; there is no best-of-N selection.
+
+The new `release-evals` CI job runs this command without external provider access
+and uploads only sanitized `regression.json` artifacts, including failures. Make
+that job a required branch check through normal repository administration before
+relying on it to prevent merges; this source change does not alter branch rules.
+
+Reports live in ignored `.runtime/evals/<timestamp>/`, with revision, dirty flag,
+manifest hash, seeds, durations and per-scenario evidence. They deliberately set
+`release_ready: false`: deployed/model validation is a separate requirement.
+No raw subprocess logs, credentials, prompts or model responses are saved.
+
+### Actual intake-model evaluation (explicit opt-in)
+
+`evals/intake-cases.json` contains ten fixed English/Spanish requests, transcript
+fixtures, revisions, PR follow-ups, missing-context cases and adversarial quoted
+input. Hand-authored positive and negative controls test the field-specific
+graders before trusting their scores. A requirement found only in background
+context cannot satisfy a scope/acceptance check. This narrow benchmark catches
+literal omissions, wrong values and selected scope expansion; it does not prove
+general semantic correctness, actual audio decoding, visual fidelity or code quality.
+Known same-field negations, contradictory publication actions, wrong literal/numeric
+boundaries and omitted newlines have explicit rejection controls. Unrecognized
+paraphrases or subtle contradictions still need human review; these rules are not
+a calibrated general-purpose semantic evaluator.
+
+With the existing OpenAI configuration available in the current environment:
+
+```bash
+node evals/intake.mjs --live --trials 3
+```
+
+This uses the production `OpenAI.structure_task/1` adapter and draft normalization,
+without starting the application, database workers or executor. It uses the
+configured `OPENAI_TASK_MODEL` (existing default otherwise), never changes a model
+or writes a key, caps the corpus at twenty cases and trials at three, allows at most
+45 seconds per case, and makes no Slack/Linear/GitHub mutations. For a narrow probe,
+add `--case text.exact_file`. `--live` is mandatory. Missing credentials exit
+nonzero and produce blocked results rather than fake model passes.
+
+`intake.json` records the model, corpus hash, grading checks and trial outcomes,
+not raw outputs. A green result still requires periodic human inspection of model
+behavior outside this deliberately small literal-fact rubric. Cost/token usage is
+not reported because the current production adapter does not return that metadata;
+do not infer it from elapsed time. Provider and grading failures are not success.
+
+### Focused deployed reliability cycle
+
+Use the explicitly authorized test account/project. Verify current deployment and
+executor, then exercise a marked text request, correction, confirmation, exact
+file result, and follow-up on that same PR. Test audio separately using a known
+short recording with a hand-checked transcript. Verify issue/PR counts and content,
+not merely the bot's success message. Leave PRs open, never merge/deploy test changes.
+`evals/delivery.mjs` grades the provider snapshot's repository, PR number, branch,
+base, open/unmerged state, exact head-pinned file bytes and sole changed filename.
+A continuation must also advance the previously observed head. Supply snapshots
+from authenticated GitHub reads; the pure grader cannot authenticate evidence.
+Record artifact links, observed outcomes and blocked/not-run steps in a cycle report.
+Do not interrupt a customer's active executor to simulate failure; use the local
+recovery fixtures for disconnects/replays/revocation unless disruption is separately
+approved. A cached browser page or a Render deploy marked live does not establish
+current endpoint health. Missing live evidence keeps the release gate incomplete.
+
 ## Before connecting real tools
 
 - Run connector tests and TypeScript checking with the committed package lock.

@@ -43,9 +43,14 @@ defmodule DevOrchestratorWeb.HealthController do
         slack[:signing_secret] != "" and DevOrchestrator.Connections.OpenAI.configured?()
 
     cond do
-      not configured -> "unconfigured"
-      readiness["failed_slack_drafts"] > 0 or readiness["pending_slack_drafts"] > 100 -> "degraded"
-      true -> "configured"
+      not configured ->
+        "unconfigured"
+
+      readiness["failed_slack_drafts"] > 0 or readiness["pending_slack_drafts"] > 100 ->
+        "degraded"
+
+      true ->
+        "configured"
     end
   end
 

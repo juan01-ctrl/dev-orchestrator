@@ -158,7 +158,8 @@ defmodule DevOrchestrator.Runs.Lifecycle do
         project["organization_id"]
       ])
 
-    if run && run["state"] in @active_run_states do
+    if run && run["state"] in @active_run_states &&
+         not review_continuation?(project, issue, run) do
       result = %{"summary" => "Cancelled because the Linear issue left an active workflow state."}
 
       cancelled =
@@ -172,5 +173,23 @@ defmodule DevOrchestrator.Runs.Lifecycle do
     else
       %{result: :unchanged, activation: lifecycle["activation"]}
     end
+  end
+
+  # Successful delivery intentionally moves the issue out of active work. That
+  # review-state webhook must not cancel an explicitly approved PR continuation.
+  # Removal, scope changes and all other inactive states still cancel normally.
+  defp review_continuation?(project, issue, run) do
+    snapshot = run["snapshot"] || %{}
+
+    get_in(issue, ["state", "name"]) == (project["review_state"] || "In Review") and
+      is_binary(project["linear_team"]) and
+      get_in(issue, ["team", "id"]) == project["linear_team"] and
+      (is_nil(project["linear_project"]) or
+         get_in(issue, ["project", "id"]) == project["linear_project"]) and
+      snapshot["workflow_version"] == 2 and
+      get_in(snapshot, ["continuation", "kind"]) in ~w(slack_followup pr_feedback) and
+      is_binary(get_in(snapshot, ["resume_candidate", "pr_url"])) and
+      is_binary(snapshot["resume_head"]) and
+      snapshot["resume_head"] == get_in(run, ["result", "commit"])
   end
 end

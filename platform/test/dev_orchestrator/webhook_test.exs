@@ -37,7 +37,9 @@ defmodule DevOrchestrator.WebhookTest do
     body = ~s({"event_id":"Ev-1"})
     timestamp = "1700000000"
     base = "v0:" <> timestamp <> ":" <> body
-    signature = "v0=" <> (:crypto.mac(:hmac, :sha256, "secret", base) |> Base.encode16(case: :lower))
+
+    signature =
+      "v0=" <> (:crypto.mac(:hmac, :sha256, "secret", base) |> Base.encode16(case: :lower))
 
     assert Signature.valid_slack?(body, signature, timestamp, "secret", 1_700_000_000)
     refute Signature.valid_slack?(body <> " ", signature, timestamp, "secret", 1_700_000_000)
