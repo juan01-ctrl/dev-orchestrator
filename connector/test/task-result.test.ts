@@ -20,3 +20,31 @@ test("structured results are bounded, redact credentials and retain useful check
   assert.doesNotMatch(report, /ghp_/);
   assert.throws(() => normalizeTaskResult({ outcome: "maybe" }), /outcome/i);
 });
+
+test("human PR report includes original intent, exact files, review provenance and honest check limitations", () => {
+  const result = normalizeTaskResult({ outcome: "completed", summary: "Added export", validation: [{ command: "npm test", status: "passed" }, { command: "browser test", status: "not_run" }] });
+  const report = formatTaskReport(result, {
+    title: "Export CSV", request: "Workspace admins need monthly CSV reports. @everyone <script>bad</script>",
+    files: ["src/export.ts"], commit: "b".repeat(40), baseline: "a".repeat(40),
+    review: { baseline: "a".repeat(40), commit: "b".repeat(40), generation: 1, task_digest: "c".repeat(64), verdict: "approve", summary: "No actionable issues found", findings: [], limitations: ["Inspection only"] }
+  });
+  for (const section of ["Original request", "Agent implementation summary", "Changed files", "Validation", "Independent review", "Human review checklist"]) assert.ok(report.includes(section));
+  assert.match(report, /monthly CSV/); assert.match(report, /src\/export\.ts/); assert.match(report, /browser test: not_run/);
+  assert.match(report, /Inspection only/); assert.match(report, /bbbbbbbb/);
+  assert.doesNotMatch(report, /@everyone|<script>/);
+});
+
+test("PR context redacts private source URLs and credentials, and does not claim unperformed review", () => {
+  const report = formatTaskReport(normalizeTaskResult({ outcome: "completed" }), {
+    request: 'See https://uploads.linear.app/private/image.png?signature=secret and Authorization: Bearer confidentialtoken123', files: [], commit: "a".repeat(40), baseline: "b".repeat(40)
+  });
+  assert.doesNotMatch(report, /signature=secret|confidentialtoken123/);
+  assert.match(report, /not performed/i);
+});
+
+test("human PR context separates agent claims from connector-executed validation", () => {
+  const result=normalizeTaskResult({outcome:"completed",validation:[{command:"browser check",status:"passed",source:"connector"},{command:"npm test",status:"passed"}],verification_notes:["Everything verified"]});
+  const report=formatTaskReport(result,{files:[],commit:"b".repeat(40),baseline:"a".repeat(40),executedChecks:[{command:"npm test",status:"passed"}]});
+  assert.match(report,/Connector-executed checks[\s\S]*npm test: passed[\s\S]*Agent-reported checks[\s\S]*browser check: passed/);
+  assert.match(report,/Agent-reported checks are claims/);
+});

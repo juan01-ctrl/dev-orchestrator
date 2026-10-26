@@ -40,6 +40,19 @@
     {"id":"report.truthful_outcome","engine":"platform","category":"publication","name":"DevOrchestrator.ProviderTest::test Slack final reports include the actual summary, failed check and real question"},
     {"id":"continuation.linear_review","engine":"platform","category":"continuation","name":"DevOrchestrator.LinearReviewContinuationTest::test review-state reconciliation preserves approved PR continuations without creating another task"},
     {"id":"continuation.linear_scope_cancellation","engine":"platform","category":"authorization","name":"DevOrchestrator.LinearReviewContinuationTest::test review continuations still cancel for removed, cancelled or differently scoped Linear issues"},
-    {"id":"continuation.unverified_cancellation","engine":"platform","category":"authorization","name":"DevOrchestrator.LinearReviewContinuationTest::test ordinary or unverified work does not bypass inactive Linear state cancellation"}
+    {"id":"continuation.unverified_cancellation","engine":"platform","category":"authorization","name":"DevOrchestrator.LinearReviewContinuationTest::test ordinary or unverified work does not bypass inactive Linear state cancellation"},
+    {"id":"review.strict_findings","engine":"connector","category":"validation","name":"independent review fails closed on malformed, inconclusive or contradictory findings"},
+    {"id":"review.exact_head","engine":"connector","category":"validation","name":"review approval is reusable only for the exact base, head, generation and task"},
+    {"id":"review.isolated_checkout","engine":"connector","category":"authorization","name":"candidate review clone has independent objects, exact refs and no runtime files or remotes"},
+    {"id":"review.fresh_readonly_session","engine":"connector","category":"authorization","name":"reviewer starts a fresh read-only no-network session without implementation history or publishing credentials"},
+    {"id":"review.blocks_publication","engine":"connector","category":"validation","name":"important or inconclusive independent review blocks before obtaining publish credentials"},
+    {"id":"review.retry_approval","engine":"connector","category":"recovery","name":"publication retry reuses only the exact independent approval without rerunning implementation"},
+    {"id":"review.capability_fence","engine":"platform","category":"authorization","name":"DevOrchestrator.RunsTest::test independent review is frozen only for capable executors and cannot be downgraded at publication"},
+    {"id":"report.human_context","engine":"connector","category":"publication","name":"human PR report includes original intent, exact files, review provenance and honest check limitations"},
+    {"id":"report.idempotent_comment","engine":"connector","category":"idempotency","name":"detailed PR summary comments are commit-pinned, bot-scoped and idempotent"},
+    {"id":"report.ambiguous_comment","engine":"connector","category":"recovery","name":"a lost GitHub comment acknowledgement is ambiguous, not a blind retry"},
+    {"id":"review.publish_fence","engine":"connector","category":"publication","name":"publication rejects a head advanced after independent approval"},
+    {"id":"report.comment_recovery","engine":"connector","category":"recovery","name":"verification recovery delivers an unattempted summary and reconciles uncertain sends without reposting"},
+    {"id":"report.check_provenance","engine":"connector","category":"validation","name":"human PR context separates agent claims from connector-executed validation"}
   ]
 }

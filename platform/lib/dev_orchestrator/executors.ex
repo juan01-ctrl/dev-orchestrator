@@ -109,7 +109,7 @@ defmodule DevOrchestrator.Executors do
     safe =
       Map.take(
         capabilities,
-        ~w(protocol codex_authenticated platform active_slots capacity workflow_version)
+        ~w(protocol codex_authenticated platform active_slots capacity workflow_version review_version)
       )
 
     Store.exec(

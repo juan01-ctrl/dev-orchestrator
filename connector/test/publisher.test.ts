@@ -80,6 +80,50 @@ test("a repair cannot recreate a closed pull request",async()=>{
   } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
+test("detailed PR summary comments are commit-pinned, bot-scoped and idempotent",async()=>{
+  const f=await fixture();
+  try {
+    const sha=f.git(f.workspace.path,["rev-parse","HEAD"]);
+    const comments:any[]=[];let posts=0;
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{apiFetch:async(url,init)=>{
+      if(String(url).includes("/pulls/"))return new Response(JSON.stringify(pullRequest(sha)));
+      if(init?.method==="POST"){posts++;const body=JSON.parse(String(init.body)).body;comments.push({id:1,body,user:{login:credential.author_name}});return new Response(JSON.stringify(comments[0]),{status:201});}
+      return new Response(JSON.stringify(comments));
+    }});
+    assert.equal(await publisher.summaryComment("https://github.com/acme/app/pull/17",sha,"## Human context\nDetailed request and validation",credential),"sent");
+    assert.equal(await publisher.summaryComment("https://github.com/acme/app/pull/17",sha,"Same context",credential),"sent");
+    assert.equal(posts,1);assert.match(comments[0].body,/Human context/);assert.ok(comments[0].body.includes(sha));
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("a lost GitHub comment acknowledgement is ambiguous, not a blind retry",async()=>{
+  const f=await fixture();
+  try {
+    const sha=f.git(f.workspace.path,["rev-parse","HEAD"]);let posts=0;
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{apiFetch:async(url,init)=>{
+      if(String(url).includes("/pulls/"))return new Response(JSON.stringify(pullRequest(sha)));
+      if(init?.method==="POST"){posts++;throw new Error("acknowledgement lost");}
+      return new Response("[]");
+    }});
+    assert.equal(await publisher.summaryComment("https://github.com/acme/app/pull/17",sha,"Context",credential),"ambiguous");
+    assert.equal(posts,1);
+    assert.equal(await publisher.summaryComment("https://github.com/acme/app/pull/17",sha,"Context",credential,undefined,true),"ambiguous");
+    assert.equal(posts,1);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("publication rejects a head advanced after independent approval",async()=>{
+  const f=await fixture();
+  try {
+    const reviewed=f.git(f.workspace.path,["rev-parse","HEAD"]);
+    await writeFile(join(f.workspace.path,"later.txt"),"unreviewed\n");
+    f.git(f.workspace.path,["add","later.txt"]);f.git(f.workspace.path,["commit","-m","test: later change"]);
+    const publisher=new Publisher({workspace:f.workspace.path,repository:"acme/app",baseBranch:"main",branch:f.workspace.branch,baseline:f.workspace.baseline,gitDir:f.workspace.gitDir,commonDir:f.workspace.commonDir},{remoteURL:()=>f.remote,apiFetch:async()=>new Response(JSON.stringify([pullRequest(f.git(f.workspace.path,["rev-parse","HEAD"]))]))});
+    await assert.rejects(publisher.publish("Task","Reviewed context",credential,undefined,reviewed),/review|candidate|changed/i);
+    assert.equal(f.git(f.remote,["for-each-ref","--format=%(refname)",`refs/heads/${f.workspace.branch}`]),"");
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
 test("trusted connector commits uncommitted task files without agent access to shared Git metadata",async()=>{
   const f=await fixture(false);
   try {

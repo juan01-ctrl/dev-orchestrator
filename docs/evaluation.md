@@ -11,7 +11,7 @@ node evals/run.mjs --trials 3
 ```
 
 This runs the eval harness's own tests, connector typecheck/build and the complete
-platform/connector suites three times. `evals/manifest.json` identifies 40 required
+platform/connector suites three times. `evals/manifest.json` identifies 53 required
 workflow scenarios across intake, authorization, idempotency, validation,
 continuation, publication and recovery. Renamed/missing/skipped/duplicate scenarios,
 any failing native test, malformed evidence, process failure or timeout fail the
@@ -81,6 +81,13 @@ approved. A cached browser page or a Render deploy marked live does not establis
 current endpoint health. Missing live evidence keeps the release gate incomplete.
 
 ## Before connecting real tools
+
+Independent review requires a fresh task claimed by connector 0.3.0 after the
+server upgrade. Verify an independent read-only/no-network process and clean
+head-pinned clone, no implementation history or publish token, rejection of
+important findings, and richer human PR context. A legacy snapshot's description
+must say review was not performed. Existing-PR updates must add a commit-marked
+summary without overwriting human edits or duplicating ambiguous sends.
 
 - Run connector tests and TypeScript checking with the committed package lock.
 - Verify dependencies with the committed `platform/mix.lock`, run migrations and the complete `mix test`.

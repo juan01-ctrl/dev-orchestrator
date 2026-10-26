@@ -361,6 +361,10 @@ defmodule DevOrchestrator.Runs do
       if purpose == :publish and get_in(run, ["snapshot", "mode"]) == "investigate",
         do: Store.halt(:invalid_purpose)
 
+      if purpose == :publish and get_in(run, ["snapshot", "review_policy", "version"]) == 1 and
+           get_in(executor, ["capabilities", "review_version"]) != 1,
+         do: Store.halt(:connector_upgrade_required)
+
       github_token_access!(executor, lease)
     end
 
@@ -738,6 +742,15 @@ defmodule DevOrchestrator.Runs do
     else
       Projects.snapshot(%{data: project})
       |> Map.put("workflow_version", if(workflow_capable?(executor), do: 2, else: 1))
+      |> Map.put(
+        "review_policy",
+        if(
+          get_in(executor, ["capabilities", "review_version"]) == 1 and
+            (run["mode"] || "implement") == "implement",
+          do: %{"version" => 1},
+          else: nil
+        )
+      )
       |> Map.put("mode", run["mode"] || "implement")
       |> Map.put("execution_policy", DevOrchestrator.ExecutionPolicy.for_task(project, run))
       |> Map.put("execution_lifecycle", run["lifecycle"])

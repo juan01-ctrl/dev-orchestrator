@@ -6,6 +6,7 @@ import { resolveServerRequest, type RequestHandlers } from "./requests.ts";
 import { activityForNotification, type ActivityStage } from "../activity.ts";
 import type { TaskResult } from "../task-result.ts";
 import type { SandboxCommandResult } from "../environment.ts";
+import { cleanGitEnv } from "../process.ts";
 
 type ThreadOptions = { cwd: string; permissions?: string; model?: string; approvalPolicy?: string };
 type SessionOptions = { binary: string; cwd: string; requestHandlers?: RequestHandlers; model?: string; allowedHosts?: string[]; readOnly?: boolean };
@@ -52,6 +53,7 @@ export class AppServerSession extends EventEmitter {
     const allowed = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "LC_ALL", "CODEX_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"];
     const env = Object.fromEntries(allowed.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
     env.GIT_OPTIONAL_LOCKS = "0";
+    if(options.readOnly)Object.assign(env,cleanGitEnv(),{GIT_ATTR_NOSYSTEM:"1",GIT_CONFIG_COUNT:"2",GIT_CONFIG_KEY_0:"core.hooksPath",GIT_CONFIG_VALUE_0:"/dev/null",GIT_CONFIG_KEY_1:"core.attributesFile",GIT_CONFIG_VALUE_1:"/dev/null"});
     const args = buildAppServerArgs(options.allowedHosts, options.readOnly);
     const session = new AppServerSession(spawn(options.binary, args, { cwd: options.cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] }), options.requestHandlers);
     session.defaultModel = options.model;

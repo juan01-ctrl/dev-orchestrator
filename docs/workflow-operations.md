@@ -123,6 +123,66 @@ Retained successful PR worktrees last seven days; ordinary
 successful worktrees retain the existing one-day cleanup policy. Do not delete
 private continuation checkpoints while their pauses or review windows are active.
 
+## Independent candidate review (connector 0.3.0)
+
+Publish connector 0.3.0 before deploying the server's updated installation commands.
+Then stop the old connector cleanly and start 0.3.0 using the existing config and
+runtime directory; do not pair again or run two processes against the same runtime.
+There is no migration or new provider permission. Source changes do not publish npm.
+
+The new connector advertises `review_version: 1`. Fresh implementation snapshots
+claimed by that capability freeze `review_policy.version: 1`. Existing snapshots,
+including old continuations, retain their original policy and must not be described
+as independently reviewed. A snapshot requiring review cannot obtain a publishing
+credential from an executor that no longer advertises the capability. To evaluate
+this feature, use a fresh task after both upgrades.
+
+After deterministic checks and a local trusted commit, the implementation process
+stops. The connector exports only the candidate and baseline into a private clone
+with its own Git objects/index, no remotes and no implementation caches or notes.
+It verifies/copies task references separately. A fresh Codex process/thread reviews
+the request and pinned diff under read-only filesystem/no-network permissions,
+without publication credentials or implementation conversation/summary. It uses
+the same immutable task model; this feature does not change model routing.
+Reviewer commands ignore host Git configuration/attributes and cannot approve
+permission escalation. Publication checks the reviewed SHA again inside the trusted
+push operation, after any asynchronous credential acquisition.
+
+Review v1 is inspection-only: it does not install dependencies or claim another
+build, browser test or visual verification. There is no writable source/scratch
+area in this initial version. Critical/important findings and incomplete/invalid
+reviews block publication. Minor findings and limitations remain in the PR context.
+The reviewer gets at most three minutes within the task's existing overall budget.
+There is no automatic review-repair loop. Like any model review, approval can be
+wrong; human review and deterministic checks remain necessary.
+
+The private journal binds approval to the original baseline, exact head, generation
+and task digest. Same-head publication retries may reuse it; changed candidates
+and continuations need a new review. Missing approval after a recovered publication
+checkpoint runs review again, not an implementation restart. Local commits remain
+available when review blocks, with private continuation evidence retained.
+
+New PR descriptions include original intent, approved adjustment, agent rationale,
+changed files, separately labeled connector-executed and agent-reported validation,
+review findings/limitations, exact
+commit provenance, risks and a human checklist. Agent claims are labeled; the
+trusted connector publishes afterward. Original task text is redacted/escaped for
+GitHub, not treated as Markdown instructions or notifications.
+
+Each reviewed publication also adds a detailed commit-marked summary comment,
+including subsequent changes to an existing PR without overwriting a human-edited
+description. Comment lookup is bounded and scoped to the bot and exact commit.
+A ready checkpoint resumes an unattempted send. Pending/ambiguous sends are
+reconciled through read-only lookup and never blindly repeated. The comment body
+and target are saved atomically with the candidate verification checkpoint. If delivery
+fails, the verified PR can still succeed: its description/checkpoint is the recovery
+surface and the run summary flags delivery attention. This does not roll back code
+or claim that the comment was delivered.
+
+No live sandbox/provider execution is implied by source-level fixture tests. Before
+rollout, opt into a disposable real task and verify read-only enforcement, fresh
+thread identity, no publishing credentials, blocking findings, and actual PR context.
+
 ## Verification and rollback
 
 Run `npm run check && npm test` in `connector/`, `mix test` in `platform/`, and the

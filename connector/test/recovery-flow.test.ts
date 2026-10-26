@@ -8,8 +8,9 @@ import { execute, recover } from "../src/worker.ts";
 import { RepositoryWorkspace } from "../src/repository.ts";
 import { Journal } from "../src/journal.ts";
 import type { JournalState } from "../src/types.ts";
+import { reviewIdentity } from "../src/reviewer.ts";
 
-async function fixture(mode: "repair" | "fail" | "text" | "setup_fail" | "reported_fail" | "reported_mixed" = "repair", failures: { publish?: number; verify?: number; checkoutDuringPublish?:boolean } = {}) {
+async function fixture(mode: "repair" | "fail" | "text" | "setup_fail" | "reported_fail" | "reported_mixed" = "repair", failures: { publish?: number; verify?: number; checkoutDuringPublish?:boolean } = {}, reviewVerdict?: "approve" | "request_changes" | "blocked") {
   const root = await realpath(await mkdtemp(join(tmpdir(), "orchestrator-flow-")));
   const source = join(root, "source"), remote = join(root, "remote.git");
   await mkdir(source);
@@ -46,9 +47,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   const state: JournalState = { lease: { id: "22222222-2222-4222-8222-222222222222", project_id: "11111111-1111-4111-8111-111111111111", generation: 1, lifecycle: 1, title: "Implement change", prompt: "Make the change", snapshot: { repository: "acme/app", base_branch: "main", instructions: "" } }, sequence: 0 };
   const journal = new Journal(join(root, "slot")), repositories = new RepositoryWorkspace({ remoteURL: () => remote });
   const events: any[] = [], publications: string[] = [];
-  let publicationAttempts=0,verificationAttempts=0;
+  let publicationAttempts=0,verificationAttempts=0,reviews=0,publishTokens=0,comments=0,lookups=0;
+  if(reviewVerdict)state.lease.snapshot!.review_policy={version:1};
   const api = { post: async (path: string, payload: any) => {
     if (path.endsWith("github-token")) {
+      if(payload.purpose==="publish")publishTokens++;
       if(failures.checkoutDuringPublish && state.phase==="publish" && payload.purpose==="checkout")throw new Error("Checkout transport interrupted");
       return { token: "fake-token", expires_at: "2099-01-01T00:00:00Z", author_name: "Test", author_email: "test@example.test" };
     }
@@ -61,15 +64,48 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   } };
   const run = () => execute({ version: 2, server: "http://localhost:4100", token: "test", codexBinary: binary }, api, journal, state, performance.now(), new AbortController().signal, {
     dataRoot: root, repositories,
+    reviewer: reviewVerdict ? async input => { reviews++; return { ...reviewIdentity(input.lease,input.commit,input.baseline), verdict:reviewVerdict, summary:"Independent review",findings:[],limitations:["Inspection only"] }; } : undefined,
     publisherFactory: context => ({
+      reviewSnapshot: async (_commit:string, inspect:(path:string)=>Promise<unknown>) => inspect(context.workspace),
       changedFiles: async () => execFileSync("git", ["-C", context.workspace, "status", "--porcelain"], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(line => line.slice(3)),
       commit: async () => ({ changed: true, commit: "a".repeat(40) }),
       status: async () => ({ changed: true, commit: "a".repeat(40) }),
+      summaryComment: async (_url:string,_commit:string,_body:string,_credential:unknown,_signal:unknown,lookupOnly=false) => {if(lookupOnly){lookups++;return "ambiguous";}comments++;return "sent";},
       publish: async (_title: string, body: string) => { if(++publicationAttempts<=(failures.publish??0))throw new Error("GitHub transport interrupted"); publications.push(body); return { repository: "acme/app", branch: context.branch, base_branch: "main", commit: "a".repeat(40), pr_url: "https://github.com/acme/app/pull/1" }; }
     } as any)
   });
-  return { root, state, journal, events, publications, run, observations: async () => (await readFile(observation, "utf8")).trim().split("\n").map(line => JSON.parse(line)) };
+  return { root, state, journal, events, publications, run, reviewStats:()=>({reviews,publishTokens,comments,lookups}), observations: async () => (await readFile(observation, "utf8")).trim().split("\n").map(line => JSON.parse(line)) };
 }
+
+test("important or inconclusive independent review blocks before obtaining publish credentials", async () => {
+  for(const verdict of ["request_changes","blocked"] as const) {
+    const f=await fixture("text",{},verdict);
+    try {await f.run();assert.equal(f.publications.length,0);assert.equal(f.reviewStats().publishTokens,0);assert.equal(f.events.at(-1).kind,"blocked");assert.equal(f.events.at(-1).data.category,"validation_failed");}
+    finally {await rm(f.root,{recursive:true,force:true});}
+  }
+});
+
+test("publication retry reuses only the exact independent approval without rerunning implementation", async () => {
+  const f=await fixture("text",{publish:1},"approve");
+  try {await assert.rejects(f.run());await f.run();assert.equal(f.reviewStats().reviews,1);assert.equal(f.publications.length,1);assert.match(f.publications[0],/Independent review/);assert.equal((await f.observations()).filter(x=>x.method==="turn/start").length,1);}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("verification recovery delivers an unattempted summary and reconciles uncertain sends without reposting",async()=>{
+  for(const status of ["ready","pending","ambiguous"] as const) {
+    const f=await fixture("text",{},"approve");
+    try {
+      f.state.phase="verify";f.state.candidate={pr_url:"https://github.com/acme/app/pull/1",commit:"a".repeat(40)};
+      f.state.result={outcome:"completed",summary:"Done",validation:[],blocker:null};
+      f.state.summary_comment={commit:"a".repeat(40),status,body:"Detailed human context",context:{workspace:f.root,repository:"acme/app",branch:"task/test",baseBranch:"main",baseline:"b".repeat(40),gitDir:f.root,commonDir:f.root}};
+      await f.run();
+      assert.equal(f.reviewStats().comments,status==="ready"?1:0);
+      assert.equal(f.reviewStats().lookups,status==="ready"?0:1);
+      if(status!=="ready")assert.match(f.events.at(-1).data.summary,/PR context delivery unconfirmed/);
+      assert.equal(f.publications.length,0);
+    } finally {await rm(f.root,{recursive:true,force:true});}
+  }
+});
 
 test("missing dependencies are prepared once and a failed validation is repaired in the same thread", async () => {
   const f = await fixture();

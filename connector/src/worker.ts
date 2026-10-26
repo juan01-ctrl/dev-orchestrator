@@ -5,14 +5,15 @@ import { API, APIError } from "./api.ts";
 import { CodexSession, RepeatedFailureError, CodexBlockedError, CodexPolicyError } from "./codex.ts";
 import { RepositoryWorkspace, RepositoryPreparationFailure } from "./repository.ts";
 import { Publisher, type PublicationContext } from "./publisher.ts";
-import type { Config, JournalState } from "./types.ts";
+import type { Config, JournalState, GitHubCredential } from "./types.ts";
 import { detectEnvironment, needsValidation, runEnvironmentCommands, validationContractError } from "./environment.ts";
 import { normalizeTaskResult, formatTaskReport, type BlockerCategory } from "./task-result.ts";
 import { setTimeout as delay } from "node:timers/promises";
 import { materializeTaskAssets, taskAssetsPrompt, taskImagePaths, TaskReferenceError } from "./task-assets.ts";
+import { reviewCandidate, reviewIdentity, reviewMatches, type ReviewInput, type CandidateReview } from "./reviewer.ts";
 
 type Transport={post:(path:string,payload:unknown)=>Promise<any>;downloadAsset?:(lease:JournalState["lease"],id:string,maxBytes?:number)=>Promise<{body:Buffer;filename:string;mediaType:string;sha256:string}>};
-type ExecutionDependencies={dataRoot?:string;repositories?:RepositoryWorkspace;publisherFactory?:(context:PublicationContext)=>Publisher};
+type ExecutionDependencies={dataRoot?:string;repositories?:RepositoryWorkspace;publisherFactory?:(context:PublicationContext)=>Publisher;reviewer?:(input:ReviewInput)=>Promise<CandidateReview>};
 
 export async function waitForClarification(api:Transport,lease:JournalState["lease"],params:any,signal?:AbortSignal,pollIntervalMs=3_000):Promise<{response:unknown;expired:boolean}> {
   const request=await api.post("/executor/clarifications/request",{lease,questions:params?.questions,turnId:params?.turnId??params?.turn_id??""});
@@ -100,7 +101,7 @@ export async function runLoop(config:Config,root:string,signal:AbortSignal,dataR
   const health=CodexSession.start(config.codexBinary??"codex",root);
   let authenticated=false;
   try {await health.initialize();authenticated=await health.authenticated();}finally{health.stop();}
-  await api.post("/executor/heartbeat",{protocol:1,workflow_version:2,codex_authenticated:authenticated,platform:process.platform});
+  await api.post("/executor/heartbeat",{protocol:1,workflow_version:2,review_version:1,codex_authenticated:authenticated,platform:process.platform});
   if(!authenticated)throw new Error("Sign in to the official Codex CLI with your own ChatGPT account before starting this connector.");
   if(recovered)await execute(config,api,journal,recovered,performance.now(),signal,{dataRoot,repositories});
   while(!signal.aborted) {
@@ -110,7 +111,7 @@ export async function runLoop(config:Config,root:string,signal:AbortSignal,dataR
         await execute(config,api,journal,interrupted,performance.now(),signal,{dataRoot,repositories});
         continue;
       }
-      await api.post("/executor/heartbeat",{protocol:1,workflow_version:2,codex_authenticated:true,platform:process.platform});
+      await api.post("/executor/heartbeat",{protocol:1,workflow_version:2,review_version:1,codex_authenticated:true,platform:process.platform});
       const claimStarted=performance.now();
       const lease=await api.post("/executor/claim",{});
       if(lease) {
@@ -150,7 +151,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     try {
       const result=await api.post("/executor/renew",state.lease);
       if(!controller.signal.aborted)deadline=started+Math.min(result.expires_in_ms,90_000)-5_000;
-      await api.post("/executor/heartbeat",{protocol:1,workflow_version:2,codex_authenticated:true,platform:process.platform,active_slots:1}).catch(()=>{});
+      await api.post("/executor/heartbeat",{protocol:1,workflow_version:2,review_version:1,codex_authenticated:true,platform:process.platform,active_slots:1}).catch(()=>{});
     } catch(error) {
       if(error instanceof APIError && [401,409].includes(error.status))abort();
       // A transport failure does not extend the last acknowledged deadline.
@@ -158,6 +159,26 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
   },20_000);
   const timeBudget=setTimeout(()=>{timedOut=true;abort();},Math.max(0,state.deadline_at-Date.now()));
   const blocked=(category:BlockerCategory,message:string,question=""):CodexBlockedError=>new CodexBlockedError(normalizeTaskResult({outcome:"blocked",summary:message,validation:state.result?.validation??[],blocker:{category,message,question}}));
+  const deliverSummary=async(credential?:GitHubCredential):Promise<void>=>{
+    if((state.lease.snapshot?.review_policy as any)?.version!==1 || !state.candidate)return;
+    const checkpoint=state.summary_comment;
+    if(checkpoint?.status==="sent")return;
+    if(checkpoint?.context && checkpoint.body && checkpoint.commit===state.candidate.commit) {
+      try {
+        const token=credential??await api.post("/executor/github-token",{lease:state.lease,purpose:"publish"});
+        const lookupOnly=checkpoint.status!=="ready";
+        const publisher=dependencies.publisherFactory?.(checkpoint.context)??new Publisher(checkpoint.context);
+        if(!lookupOnly){checkpoint.status="pending";await journal.save(state);}
+        checkpoint.status=await publisher.summaryComment(state.candidate.pr_url,checkpoint.commit,checkpoint.body,token,controller.signal,lookupOnly);
+      } catch {checkpoint.status="ambiguous";}
+    }
+    if(checkpoint?.status!=="sent") {
+      state.result??=normalizeTaskResult({outcome:"completed"});
+      const warning="PR context delivery unconfirmed. Inspect the PR and preserved summary checkpoint.";
+      if(!state.result.summary.startsWith(warning))state.result.summary=(warning+" "+state.result.summary).slice(0,1000);
+    }
+    await journal.save(state);
+  };
   const verify=async():Promise<string>=>{
     phase="publication_failed";
     while((state.verification_attempts??0)<3) {
@@ -176,6 +197,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       state.publication_attempts=(state.publication_attempts??0)+1;await journal.save(state);
     }
     if(state.phase==="verify" && state.candidate) {
+      await deliverSummary();
       const finalState=await verify();
       if(state.workspace && finalState==="succeeded") {
         await journal.preserveCompleted(state);
@@ -202,6 +224,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     workspacePath=workspace.path;
     await repositories.excludeRuntimeFiles(workspace.path);
     const snapshot=state.lease.snapshot??{};
+    if(snapshot.review_policy && (snapshot.review_policy as any).version!==1)throw blocked("validation_failed","This connector cannot enforce the required independent review policy. Upgrade before retrying.");
     const investigation=snapshot.mode==="investigate";
     const instructionsPath=await repositories.writeProjectInstructions(workspace.path,snapshot.instructions??"");
     state.workspace=workspace.path;state.baseline=workspace.baseline;await journal.save(state);
@@ -252,6 +275,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       "Read and respect the repository's AGENTS.md and project-scoped skills. Do not change global skills or configuration.",
       "Do not invent external access or credentials. Use the context request tool only for an indispensable user decision. Missing packages, failing checks, and provider errors are not missing context. Network access is limited to the exact hosts in the immutable task policy.",
       "Never invent missing task evidence or silently approximate an explicit reference requirement. If an indispensable image or file cannot be inspected, report the specific blocker before editing. Do not claim pixel-perfect or visual verification unless you inspected both the reference and the rendered result.",
+      "For human review, explain substantive changes and their rationale in changes, known risks in risks, and verification limitations/manual checks in verification_notes. Do not claim the overall flow performed no commits or PR actions: the trusted executor publishes after your turn.",
       instructionsPath
         ? "Project instructions: read and follow the file at "+instructionsPath+" before making changes."
         : "Project instructions:\n"+String(snapshot.instructions??""),
@@ -338,13 +362,14 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         await writeEvent("progress",{stage:"environment_preparing"});
         const setup=await runEnvironmentCommands(plan.setup,argv=>session!.session.exec(argv,workspace.path,controller.signal,Math.max(1,Math.min(120_000,state.deadline_at!-Date.now()))));
         failed=setup.failure?{...setup.failure,category:setup.failure.category==="network_unavailable"?"network_unavailable":"environment_setup_failed"}:undefined;
-        if(failed)state.result={...state.result!,validation:setup.checks};
+        if(failed){state.result={...state.result!,validation:setup.checks};state.executed_checks=setup.checks;}
         if(!failed){state.environment_fingerprint=(await detectEnvironment(workspace.path)).fingerprint;await journal.save(state);}
       }
       if(!failed) {
         phase="validation_failed";await writeEvent("progress",{stage:"validating"});
         const validation=await runEnvironmentCommands(plan.validate,argv=>session!.session.exec(argv,workspace.path,controller.signal,Math.max(1,Math.min(120_000,state.deadline_at!-Date.now()))));
         const rerun=new Set(validation.checks.map(check=>check.command));
+        state.executed_checks=[...(state.executed_checks??[]).filter(check=>!rerun.has(check.command)),...validation.checks];
         state.result={...state.result!,validation:[...(state.result?.validation??[]).filter(check=>!rerun.has(check.command)),...validation.checks]};failed=validation.failure;
         if(!failed)await writeEvent("progress",{stage:"checks_passed"});
       }
@@ -376,12 +401,40 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
       {author_name:credential.author_name,author_email:credential.author_email},controller.signal);
     const status=await publisher.status(controller.signal);
     const previousCandidate=snapshot.resume_candidate as Record<string,string>|undefined;
+    const identity=reviewIdentity(state.lease,status.commit,workspace.baseline);
+    if((snapshot.review_policy as any)?.version===1 && (status.changed || previousCandidate?.pr_url)) {
+      if(!reviewMatches(state.review,identity)) {
+        delete state.review;
+        const reviewSignal=AbortSignal.any([controller.signal,AbortSignal.timeout(Math.max(1,Math.min(180_000,state.deadline_at!-Date.now())))]);
+        try {
+          state.review=await publisher.reviewSnapshot(status.commit,path=>(dependencies.reviewer??reviewCandidate)({ ...identity,binary:config.codexBinary??"codex",workspace:path,sourceWorkspace:workspace.path,lease:state.lease,assets:state.materialized_assets,
+            model:(snapshot.execution_policy as any)?.model,effort:(snapshot.execution_policy as any)?.effort,signal:reviewSignal }),reviewSignal);
+          await journal.save(state);
+        } catch(error) {
+          if(controller.signal.aborted)throw error;
+          throw blocked("validation_failed","Independent review could not complete or returned invalid evidence. Existing work is preserved; publication was not attempted.");
+        }
+      }
+      if(!reviewMatches(state.review,identity)) {
+        await journal.preserveCompleted(state);
+        const finding=state.review?.findings.find(f=>f.severity!=="minor");
+        throw blocked("validation_failed",finding?`Independent review requires changes: ${finding.path}:${finding.line}: ${finding.description}`:"Independent review did not approve this candidate. Review its limitations before retrying.");
+      }
+      if((await publisher.status(controller.signal)).commit!==status.commit)throw blocked("validation_failed","Candidate changed after independent review; publication stopped.");
+    }
     if(status.changed || previousCandidate?.pr_url) {
       await emitDurably(api,journal,state,"progress",{stage:"publishing"});
+      const body=formatTaskReport(state.result??normalizeTaskResult({outcome:"completed"}),{title:state.lease.title,request:state.lease.prompt,adjustment:snapshot.continuation?JSON.stringify(snapshot.continuation):undefined,
+        runURL:config.server+"/app/runs/"+state.lease.id,files:await publisher.changedFiles(controller.signal),commit:status.commit,baseline:workspace.baseline,review:state.review,executedChecks:state.executed_checks});
+      const publishCredential=status.changed?await api.post("/executor/github-token",{lease:state.lease,purpose:"publish"}):undefined;
       const result=status.changed
-        ? await publisher.publish(state.lease.title??"Development task",formatTaskReport(state.result??normalizeTaskResult({outcome:"completed"})),await api.post("/executor/github-token",{lease:state.lease,purpose:"publish"}),controller.signal)
+        ? await publisher.publish(state.lease.title??"Development task",body,publishCredential,controller.signal,status.commit)
         : {...previousCandidate!,commit:status.commit};
-      state.candidate=result;state.phase="verify";await journal.save(state);
+      state.candidate=result;state.phase="verify";
+      if((snapshot.review_policy as any)?.version===1 && state.summary_comment?.commit!==status.commit)
+        state.summary_comment={commit:status.commit,status:"ready",body,context:publicationContext};
+      await journal.save(state);
+      await deliverSummary(publishCredential);
       await journal.preserveCompleted(state);
       if(controller.signal.aborted)throw new Error("Lease ended.");
       await emitDurably(api,journal,state,"progress",{stage:"pr_verifying"});
@@ -399,7 +452,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
     if(parkedForInput)return;
     session?.stop();
     if((controller.signal.aborted && !timedOut) || state.pending_event)throw error;
-    if(state.phase==="publish" && (state.publication_attempts??0)>0 && (state.publication_attempts??0)<3 && !timedOut)throw error;
+    if(state.phase==="publish" && (state.publication_attempts??0)>0 && (state.publication_attempts??0)<3 && !timedOut && !(error instanceof CodexBlockedError))throw error;
     if(error instanceof APIError && ["github_installation_required","github_permission_denied","base_branch_missing","github_unavailable","local_policy_denied"].includes(error.code))phase=error.code;
     else if(error instanceof APIError && error.code==="provider_authentication")phase="github_permission_denied";
     else if(error instanceof APIError && ["provider_rejected","provider_rate_limit","provider_unavailable"].includes(error.code))phase="github_unavailable";

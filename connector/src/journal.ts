@@ -65,6 +65,8 @@ export class Journal {
     state.attempts=0;state.publication_attempts=0;state.verification_attempts=0;
     state.continuation_started=false;
     delete state.pending_event;delete state.result;delete state.candidate;delete state.repair_context;
+    delete state.review;delete state.summary_comment;
+    delete state.executed_checks;
     await this.save(state);await unlink(path);
     return state;
   }

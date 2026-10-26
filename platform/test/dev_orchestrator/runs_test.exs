@@ -37,6 +37,29 @@ defmodule DevOrchestrator.RunsTest do
     assert lease["snapshot"]["base_branch"] == "main"
   end
 
+  test "independent review is frozen only for capable executors and cannot be downgraded at publication",
+       ctx do
+    capabilities = %{"workflow_version" => 2, "review_version" => 1}
+    :ok = Executors.heartbeat(ctx.executor, capabilities)
+    capable = Store.one("SELECT * FROM executors WHERE id=$1", [ctx.executor["id"]])
+    assert capable["capabilities"]["review_version"] == 1
+
+    {:ok, _} =
+      Runs.create(ctx.scope, ctx.project.id, %{
+        "title" => "Reviewed task",
+        "prompt" => "Create file"
+      })
+
+    {:ok, lease} = Runs.claim(capable)
+    assert lease["snapshot"]["review_policy"]["version"] == 1
+    downgraded = Map.put(capable, "capabilities", %{"workflow_version" => 2})
+    assert {:error, :connector_upgrade_required} = Runs.github_token(downgraded, lease, :publish)
+
+    assert Store.one("SELECT snapshot FROM runs WHERE id=$1", [lease["id"]])["snapshot"][
+             "review_policy"
+           ]["version"] == 1
+  end
+
   test "a durable human wait releases capacity and an answer queues a fenced continuation", ctx do
     {:ok, run} =
       Runs.create(ctx.scope, ctx.project.id, %{"title" => "Question", "prompt" => "Implement"})

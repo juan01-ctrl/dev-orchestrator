@@ -45,6 +45,26 @@ export class Publisher {
     }, signal);
   }
 
+  async reviewSnapshot<T>(commit: string, inspect: (workspace: string) => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (!validSHA(commit)) throw new Error("Invalid review candidate.");
+    return this.trusted(async (git, sha, temp) => {
+      if (sha !== commit) throw new Error("Candidate head changed before review.");
+      await git(["update-ref", "refs/heads/review-candidate", commit]);
+      await git(["update-ref", "refs/heads/review-base", this.context.baseline]);
+      const bundle = join(temp, "review.bundle");
+      await git(["bundle", "create", bundle, "refs/heads/review-candidate", "refs/heads/review-base"]);
+      const workspace = join(temp, "review");
+      const env = cleanGitEnv();
+      await this.runCommand("git", ["-c", "core.hooksPath=/dev/null", "clone", "--no-local", "--no-checkout", "--template=", "--", bundle, workspace], { env, signal });
+      const isolated = (args: string[]) => this.runCommand("git", ["-C", workspace, "-c", "core.hooksPath=/dev/null", "-c", "core.attributesFile=/dev/null", ...args], { env, signal });
+      await isolated(["config", "--remove-section", "remote.origin"]);
+      await isolated(["update-ref", "refs/heads/review-base", this.context.baseline]);
+      await isolated(["checkout", "--detach", commit]);
+      if ((await isolated(["rev-parse", "HEAD"])).output !== commit) throw new Error("Review candidate changed.");
+      return inspect(await realpath(workspace));
+    }, signal);
+  }
+
   async commit(identifier:string,author:Pick<GitHubCredential,"author_name"|"author_email">,signal?:AbortSignal):Promise<{changed:boolean;commit:string}> {
     if(!/^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/.test(identifier) ||
       !author?.author_name || author.author_name.length>200 || /[\r\n\x00]/.test(author.author_name) ||
@@ -67,12 +87,14 @@ export class Publisher {
     },signal);
   }
 
-  async publish(title:string,body:string,credential:GitHubCredential,signal?:AbortSignal):Promise<Record<string,string>> {
+  async publish(title:string,body:string,credential:GitHubCredential,signal?:AbortSignal,expectedCommit?:string):Promise<Record<string,string>> {
+    if(expectedCommit!==undefined && !validSHA(expectedCommit))throw new Error("Invalid reviewed candidate.");
     if(!title.trim() || title.length>240 || body.length>64_000)throw new Error("Invalid PR metadata.");
     validateGitHubCredential(credential);
     const status=await this.status(signal);
     if(!status.changed)throw new Error("No committed changes to publish.");
     return this.trusted(async(git,sha,temp,objects)=>{
+      if(expectedCommit!==undefined && sha!==expectedCommit)throw new Error("Candidate changed after independent review; publication stopped.");
       const previousPath=this.context.previousPullRequest?`/repos/${this.context.repository}/pulls/${this.context.previousPullRequest.split("/").at(-1)}`:undefined;
       if(previousPath) {
         const previous=await this.githubRequest("GET",previousPath,credential,undefined,signal);
@@ -96,6 +118,31 @@ export class Publisher {
       if(!this.matchesPullRequest(pr,sha))throw new Error("GitHub pull request does not match the task commit.");
       return {repository:this.context.repository,branch:this.context.branch,base_branch:this.context.baseBranch,commit:sha,pr_url:pr.html_url};
     },signal);
+  }
+
+  async summaryComment(prURL: string, commit: string, body: string, credential: GitHubCredential, signal?: AbortSignal, lookupOnly=false): Promise<"sent" | "ambiguous" | "rejected"> {
+    validateGitHubCredential(credential);
+    const prefix = `https://github.com/${this.context.repository}/pull/`;
+    if (!prURL.startsWith(prefix) || !/^[1-9][0-9]*$/.test(prURL.slice(prefix.length)) || !validSHA(commit) || body.length > 60_000) throw new Error("Invalid PR summary target.");
+    const number = prURL.slice(prefix.length), marker = `<!-- dev-orchestrator-summary:${commit} -->`;
+    const own = (comment: any) => comment?.user?.login === credential.author_name && typeof comment.body === "string" && comment.body.startsWith(marker + "\n");
+    try {
+      const pr = await this.githubRequest("GET", `/repos/${this.context.repository}/pulls/${number}`, credential, undefined, signal);
+      if (!pr.ok || !this.matchesPullRequest(pr.body, commit)) return "rejected";
+      for (let page = 1; page <= 3; page++) {
+        const response = await this.githubRequest("GET", `/repos/${this.context.repository}/issues/${number}/comments?per_page=100&page=${page}`, credential, undefined, signal);
+        if (!response.ok || !Array.isArray(response.body)) return "rejected";
+        if (response.body.some(own)) return "sent";
+        if (response.body.length < 100) break;
+        if (page === 3) return "rejected";
+      }
+    } catch { return "rejected"; } // No write was attempted.
+    if(lookupOnly)return "ambiguous";
+    try {
+      const response = await this.githubRequest("POST", `/repos/${this.context.repository}/issues/${number}/comments`, credential, { body: marker + "\n" + body }, signal);
+      if (response.ok) return own(response.body) && Number.isSafeInteger(response.body.id) ? "sent" : "ambiguous";
+      return response.status >= 500 ? "ambiguous" : "rejected";
+    } catch { return "ambiguous"; } // Accepted-but-unacknowledged writes are never blindly repeated.
   }
 
   private async findOpenPullRequest(credential:GitHubCredential,signal?:AbortSignal):Promise<any|undefined> {
