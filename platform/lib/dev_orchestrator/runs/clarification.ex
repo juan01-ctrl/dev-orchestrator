@@ -14,6 +14,20 @@ defmodule DevOrchestrator.Runs.Clarification do
 
   def normalize_questions(_), do: {:error, :invalid_clarification}
 
+  def decision_question([
+        %{"header" => header, "options" => [%{"label" => "Approve"}, %{"label" => "Deny"}]} =
+          question
+      ])
+      when header in [
+             "Data",
+             "Security",
+             "Commitment",
+             "Scope"
+           ],
+      do: question
+
+  def decision_question(_), do: nil
+
   def normalize_answers(questions, answers) when is_list(questions) and is_map(answers) do
     expected_ids = MapSet.new(questions, & &1["id"])
 

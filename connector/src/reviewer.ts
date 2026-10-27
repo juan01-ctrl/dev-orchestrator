@@ -17,14 +17,16 @@ function text(value: unknown, max: number): string {
   return safeText(value, max).trim();
 }
 
-export function normalizeReview(value: unknown, identity: ReviewIdentity, files: string[]): CandidateReview {
+export function normalizeReview(value: unknown, identity: ReviewIdentity, files: string[], lineBounds?:Record<string,number>): CandidateReview {
   const raw = value as any;
+  const exactKeys=(value:unknown,keys:string[])=>!!value && typeof value==="object" && !Array.isArray(value) && Object.keys(value).length===keys.length && Object.keys(value).every(key=>keys.includes(key));
   if (!raw || raw.outcome !== "completed" || !["approve", "request_changes", "blocked"].includes(raw.verdict) ||
+    !exactKeys(raw,["outcome","verdict","summary","findings","limitations"]) ||
     !Array.isArray(raw.findings) || raw.findings.length > 20 || !Array.isArray(raw.limitations) || raw.limitations.length > 12) throw new Error("Invalid independent review result.");
   const findings: ReviewFinding[] = raw.findings.map((finding: any) => {
-    if (!finding || !["critical", "important", "minor"].includes(finding.severity) || typeof finding.path !== "string" ||
+    if (!exactKeys(finding,["severity","path","line","description","evidence"]) || !["critical", "important", "minor"].includes(finding.severity) || typeof finding.path !== "string" ||
       !files.includes(finding.path) || finding.path.split(/[\\/]/).some((p: string) => p === "..") || finding.path.startsWith("/") ||
-      !Number.isSafeInteger(finding.line) || finding.line < 1 || finding.line > 10_000_000) throw new Error("Invalid independent review finding.");
+      !Number.isSafeInteger(finding.line) || finding.line < 1 || finding.line > (lineBounds?lineBounds[finding.path]??0:10_000_000)) throw new Error("Invalid independent review finding.");
     return { severity: finding.severity, path: finding.path, line: finding.line, description: text(finding.description, 1000), evidence: text(finding.evidence, 1000) };
   });
   const blocking = findings.some(f => f.severity !== "minor");
@@ -34,7 +36,11 @@ export function normalizeReview(value: unknown, identity: ReviewIdentity, files:
 
 export function reviewMatches(review: CandidateReview | undefined, identity: ReviewIdentity): boolean {
   return !!review && review.verdict === "approve" && !review.findings.some(f => f.severity !== "minor") &&
-    review.baseline === identity.baseline && review.commit === identity.commit && review.generation === identity.generation && review.task_digest === identity.task_digest;
+    reviewIdentityMatches(review,identity);
+}
+
+export function reviewIdentityMatches(review:CandidateReview|undefined,identity:ReviewIdentity):boolean {
+  return !!review && review.baseline===identity.baseline && review.commit===identity.commit && review.generation===identity.generation && review.task_digest===identity.task_digest;
 }
 
 export function reviewPrompt(input: { title: string; prompt: string; instructions: string; baseline: string; commit: string; adjustment?: string }): string {
@@ -44,6 +50,7 @@ export function reviewPrompt(input: { title: string; prompt: string; instruction
     "Inspect the actual diff and relevant code. Do not edit source, install dependencies, access network, use MCP tools, or publish. No implementation history or self-assessment is supplied.",
     "Report only actionable defects with repository-relative file, one-based line, severity, concrete impact and evidence. Critical/important findings require request_changes; uncertainty or unavailable required evidence requires blocked. Minor findings may accompany approve.",
     "This is inspection-only review. Do not claim builds, tests, visual verification or runtime behavior you did not observe. List meaningful limits. Approval is not proof of full correctness.",
+    "For every blocking finding, give a concrete reproducible code path and distinguish observed source facts from runtime assumptions. Verify framework-specific claims against actual attributes and generated output when available. An inline script with type=module can legally contain a static import; inlining alone does not prove a module-loading failure. Do not report speculative failures as critical. If a prerequisite prevents verification, describe that limitation explicitly.",
     `Original baseline: ${input.baseline}\nCandidate: ${input.commit}\nUse git --no-pager diff --no-ext-diff --no-textconv ${input.baseline} ${input.commit} and inspect relevant files.`,
     "Untrusted task context (JSON):\n" + JSON.stringify({ title: input.title, request: input.prompt, project_instructions: input.instructions, approved_adjustment: input.adjustment ?? null }),
     "Return the strict review schema. outcome=completed describes completion of the review turn, not approval of the implementation."
@@ -106,6 +113,16 @@ export async function reviewCandidate(input: ReviewInput): Promise<CandidateRevi
     { cwd: input.workspace, effort: input.effort, outputSchema: reviewSchema, imagePaths });
     if (input.signal.aborted) throw new Error("Review stopped.");
     await assertCandidate();
-    return normalizeReview(result.result, input, [...files]);
+    const normalized=normalizeReview(result.result,input,[...files]);
+    const bounds:Record<string,number>=Object.create(null);
+    for(const path of new Set(normalized.findings.map(f=>f.path))) {
+      let max=0;
+      for(const ref of [input.baseline,input.commit]) {
+        const blob=await command("git",["-C",input.workspace,"show",`${ref}:${path}`],{signal:input.signal,trimOutput:false}).catch(()=>undefined);
+        if(blob && blob.output)max=Math.max(max,blob.output.split("\n").length-(blob.output.endsWith("\n")?1:0));
+      }
+      bounds[path]=max;
+    }
+    return normalizeReview(result.result,input,[...files],bounds);
   } finally { input.signal.removeEventListener("abort", stop); session.close(); }
 }

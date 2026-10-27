@@ -10,7 +10,7 @@ test("a parked conversation survives restart and can resume on a different slot 
   try {
     const shared=join(root,"continuations");
     const first=new Journal(join(root,"slot-1"),shared);
-    const state={lease:{id:"run-pause",lifecycle:1,generation:1,snapshot:{task_branch:"task/run-pause/attempt-1"}},sequence:4,thread_id:"thread-1",workspace:"/preserved/workspace",baseline:"a".repeat(40)};
+    const state={lease:{id:"run-pause",lifecycle:1,generation:1,snapshot:{task_branch:"task/run-pause/attempt-1"}},sequence:4,attempts:2,review_repairs:1,review_failures:1,thread_id:"thread-1",workspace:"/preserved/workspace",baseline:"a".repeat(40)};
     await first.save(state);await first.park(state);
     assert.equal(await first.load(),null);
     const second=new Journal(join(root,"slot-2"),shared);
@@ -21,6 +21,8 @@ test("a parked conversation survives restart and can resume on a different slot 
     assert.equal(resumed?.lease.generation,3);
     assert.equal(resumed?.workspace,"/preserved/workspace");
     assert.equal(resumed?.deadline_at,lease.snapshot.execution_deadline_at_ms);
+    assert.equal(resumed?.attempts,2);assert.equal(resumed?.review_repairs,1);assert.equal(resumed?.review_failures,1);
+    assert.equal(resumed?.resume_interrupted_turn,true);
     assert.equal(await second.resumeContinuation(lease),null);
   } finally {await rm(root,{recursive:true,force:true});}
 });
@@ -36,4 +38,26 @@ test("a pending final result survives restart and lost acknowledgement", async (
     await first.clear();
     assert.equal(await first.load(), null);
   } finally { await rm(root,{recursive:true,force:true}); }
+});
+
+test("execution retry continuations preserve consumed repair and review budgets",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"orchestrator-retry-budget-"));
+  try {
+    const journal=new Journal(join(root,"slot"));
+    const state={lease:{id:"retry-budget",lifecycle:1,generation:1,snapshot:{task_branch:"task/retry-budget"}},sequence:0,thread_id:"thread",workspace:"/preserved",baseline:"a".repeat(40),attempts:2,review_repairs:2,review_failures:1,review_attempts:3};
+    await journal.park(state);
+    const resumed=await journal.resumeContinuation({...state.lease,generation:2,snapshot:{...state.lease.snapshot,continuation:{kind:"execution_retry"}}});
+    assert.equal(resumed?.attempts,2);assert.equal(resumed?.review_repairs,2);assert.equal(resumed?.review_failures,1);assert.equal(resumed?.review_attempts,3);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("execution retry retains saved blocking findings as focused repair input",async()=>{
+  const root=await mkdtemp(join(tmpdir(),"orchestrator-retry-findings-"));
+  try {
+    const journal=new Journal(join(root,"slot"));
+    const lease={id:"retry-findings",lifecycle:1,generation:1,snapshot:{task_branch:"task/retry-findings"}};
+    await journal.park({lease,sequence:0,phase:"publish",thread_id:"thread",workspace:"/preserved",baseline:"a".repeat(40),attempts:1,review:{baseline:"a".repeat(40),commit:"b".repeat(40),generation:1,task_digest:"digest",verdict:"request_changes",summary:"Fix error handling",findings:[{severity:"important",path:"app.js",line:1,description:"Missing error display",evidence:"No failure path"}],limitations:[]}});
+    const resumed=await journal.resumeContinuation({...lease,generation:2,snapshot:{...lease.snapshot,continuation:{kind:"execution_retry"}}});
+    assert.match(resumed?.repair_context??"",/Missing error display/);assert.equal(resumed?.review_repairs,1);assert.equal(resumed?.result?.blocker?.category,"validation_failed");
+  } finally {await rm(root,{recursive:true,force:true});}
 });

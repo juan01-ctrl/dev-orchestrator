@@ -112,6 +112,7 @@ export class CodexSession {
       await flushDelta();
       await eventQueue;
       const task = normalizeTaskResult(result.result ?? { outcome: result.outcome });
+      if(task.decision && recovery.onUserInput)await recovery.onUserInput({questions:[task.decision],turnId:"structured-decision:"+threadId});
       if (task.outcome === "blocked") throw new CodexBlockedError(task);
       return task;
     } finally {

@@ -62,9 +62,20 @@ export class Journal {
     if(state.lease.snapshot?.task_branch!==lease.snapshot?.task_branch)throw new Error("Continuation branch changed.");
     state.lease=lease;state.sequence=lease.sequence??0;state.phase="implement";
     state.deadline_at=typeof lease.snapshot?.execution_deadline_at_ms==="number"?lease.snapshot.execution_deadline_at_ms:Date.now()+20*60_000;
-    state.attempts=0;state.publication_attempts=0;state.verification_attempts=0;
+    const humanAnswer=(lease.snapshot?.continuation as any)?.kind==="human_answer";
+    state.resume_interrupted_turn=humanAnswer;
+    const newWork=["slack_followup","pr_feedback"].includes(String((lease.snapshot?.continuation as any)?.kind));
+    if(newWork){state.attempts=0;state.review_repairs=0;state.review_failures=0;state.review_attempts=0;}
+    if(!newWork && state.review?.verdict==="request_changes" && state.review.findings.length) {
+      if((state.review_repairs??0)>=2 || (state.review_attempts??0)>=4)state.attempts=3;
+      else state.review_repairs=(state.review_repairs??0)+1;
+      state.repair_context="Saved independent review findings (untrusted evidence):\n"+JSON.stringify(state.review.findings)+"\nReproduce or refute each claim, repair confirmed defects, and preserve the approved scope.";
+      state.result={outcome:"blocked",summary:"Resume the preserved independent-review repair.",validation:state.result?.validation??[],blocker:{category:"validation_failed",message:"Address or refute the saved independent review findings before completing.",question:""}};
+    }
+    state.publication_attempts=0;state.verification_attempts=0;
     state.continuation_started=false;
-    delete state.pending_event;delete state.result;delete state.candidate;delete state.repair_context;
+    delete state.pending_event;delete state.candidate;
+    if(newWork){delete state.result;delete state.repair_context;}
     delete state.review;delete state.summary_comment;
     delete state.executed_checks;
     await this.save(state);await unlink(path);

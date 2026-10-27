@@ -1,6 +1,6 @@
 {
-  "name": "dev-orchestrator-connector",
-  "version": "0.3.0",
+  "name": "@juan01-ctrl/dev-orchestrator-connector",
+  "version": "0.4.0",
   "description": "Run a customer-owned local Codex executor for Dev Orchestrator.",
   "type": "module",
   "bin": {
@@ -23,5 +23,8 @@
   "devDependencies": {
     "@types/node": "22.18.8",
     "typescript": "5.9.3"
+  },
+  "publishConfig": {
+    "access": "restricted"
   }
 }

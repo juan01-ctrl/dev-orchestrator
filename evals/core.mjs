@@ -38,6 +38,9 @@ export function assess(scenarios, records, exitCode) {
     passed: exitCode === 0 && records.length > 0 && records.every(r => r.status === 'passed') && cases.every(c => c.status === 'passed'),
     tests_executed: records.length,
     tests_failed: records.filter(r => r.status === 'failed').length,
+    failed_tests: records.filter(r => r.status === 'failed').slice(0,100).map(r => r.name
+      .replace(/\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g,'[redacted]')
+      .replace(/(?:\/Users\/[^\s"'`]+|\/home\/[^\s"'`]+)/g,'[local path]').slice(0,300)),
     tests_skipped: records.filter(r => r.status === 'skipped').length,
     scenarios: cases
   };

@@ -123,12 +123,15 @@ Retained successful PR worktrees last seven days; ordinary
 successful worktrees retain the existing one-day cleanup policy. Do not delete
 private continuation checkpoints while their pauses or review windows are active.
 
-## Independent candidate review (connector 0.3.0)
+## Independent candidate review (connector 0.4.0)
 
-Publish connector 0.3.0 before deploying the server's updated installation commands.
-Then stop the old connector cleanly and start 0.3.0 using the existing config and
-runtime directory; do not pair again or run two processes against the same runtime.
-There is no migration or new provider permission. Source changes do not publish npm.
+Release `@juan01-ctrl/dev-orchestrator-connector@0.4.0` with its configured restricted
+access. Deploy the server and its Slack decision migration before starting the new
+connector. Then stop the old connector cleanly and start 0.4.0 using the existing
+config and runtime directory; do not pair again or run two processes against the
+same runtime. No new provider permission is needed. Source changes do not publish npm.
+When changing the package name or version, update all dashboard pairing/start
+commands and their LiveView expectations before running release evaluations.
 
 The new connector advertises `review_version: 1`. Fresh implementation snapshots
 claimed by that capability freeze `review_policy.version: 1`. Existing snapshots,
@@ -153,8 +156,19 @@ build, browser test or visual verification. There is no writable source/scratch
 area in this initial version. Critical/important findings and incomplete/invalid
 reviews block publication. Minor findings and limitations remain in the PR context.
 The reviewer gets at most three minutes within the task's existing overall budget.
-There is no automatic review-repair loop. Like any model review, approval can be
+Review findings now feed back to the implementer for at most two repair cycles,
+sharing the existing limit of three implementation/validation attempts and twenty
+minutes. Each resulting candidate is validated and independently reviewed again.
+The implementer must reproduce or refute claims rather than blindly changing code
+to satisfy them. An invalid/incomplete review gets one fresh retry. Persistent
+findings or exhausted budgets stop with preserved work. Model review can still be
 wrong; human review and deterministic checks remain necessary.
+Review launches reserve a persisted total allowance of four, including interruptions.
+Technical retries and human answers preserve consumed budgets and unresolved findings;
+only an explicitly approved new PR follow-up starts a new work budget. Paused turns
+resume without being charged as another repair. Human answers and execution retries
+retain the approved PR-work provenance so reconciliation does not cancel an existing
+In Review follow-up. Fresh review still binds to the new execution generation.
 
 The private journal binds approval to the original baseline, exact head, generation
 and task digest. Same-head publication retries may reuse it; changed candidates
@@ -182,6 +196,50 @@ or claim that the comment was delivered.
 No live sandbox/provider execution is implied by source-level fixture tests. Before
 rollout, opt into a disposable real task and verify read-only enforcement, fresh
 thread identity, no publishing credentials, blocking findings, and actual PR context.
+
+## Autonomous recovery and important decisions
+
+Deploy migration `20261103000000_bind_slack_decisions.exs` with the server and run
+a connector release containing this change. The existing Docker release runs
+migrations at startup. Do not republish an already-used npm version. Package naming
+and visibility are separate release settings; preserve any pending scoped/private
+package change when preparing the next version. Existing stopped tasks require an
+explicit retry after upgrading; this change does not restart them automatically.
+
+A missing bulk Linear result is confirmed by a direct issue lookup. An unavailable
+or null direct result preserves the run and retries reconciliation; it does not
+create another activation. Explicit removal and confirmed inactive states still
+cancel. Messages distinguish removal, state changes and changed project scope.
+
+Adding a test/check script is permitted if every original script, package-manager
+selection and explicit validation configuration remains unchanged. Original checks
+still execute, together with newly detected checks. New lifecycle hooks and changed
+or removed original scripts are rejected and sent back for autonomous repair.
+Old checkpoints without script details retain conservative validation behavior.
+
+Routine agent questions are answered with autonomous guidance. Only a single
+concrete binary proposal with consequences and Approve/Deny options qualifies as
+an important decision. Headers identify irreversible data changes, security/privacy,
+external commitments or material scope choices. The model judges importance; this
+format fence is not a semantic guarantee. Technical failures use repair budgets,
+not human approval. Missing indispensable evidence remains an explicit prerequisite.
+The same question may be returned through the structured result's `decision` field
+when interactive input is unavailable. Unresolved or malformed decisions cannot
+count as completed work or reach publication. Compact Data/Security/Commitment/Scope
+headers fit the input tool's short-label constraint.
+
+Important decisions use the existing durable wait: the slot is released, the question
+lasts up to 24 hours, and the answer queues a new fenced generation of the same task.
+Slack buttons bind to the current connection grant/workspace/channel, original
+requester or OAuth installer, exact delivered message and clarification generation.
+Unknown Slack identity gets an authenticated dashboard link without unsafe buttons.
+Duplicate identical clicks are harmless; later-generation, expired, revoked or
+contradictory clicks cannot answer. Denial is recorded explicitly for the resumed
+agent to avoid the proposed action and choose a safe alternative when possible.
+
+Approval changes task intent only. It does not grant new network or filesystem
+access, expose credentials, change model selection, override checks, or authorize
+automatic publication/deployment/merge outside the existing trusted workflow.
 
 ## Verification and rollback
 

@@ -320,7 +320,9 @@ defmodule DevOrchestrator.Connections.Slack do
              "create_linear_task",
              "cancel_linear_task",
              "apply_pr_followup",
-             "cancel_pr_followup"
+             "cancel_pr_followup",
+             "approve_task_decision",
+             "deny_task_decision"
            ] and is_binary(draft_id) and
              is_binary(workspace_id) and is_binary(channel_id) and is_binary(user_id) and
              is_binary(message_ts) do
@@ -518,6 +520,24 @@ defmodule DevOrchestrator.Connections.Slack do
 
     text = "A task needs your input: " <> String.slice(payload["title"] || "Task", 0, 200)
 
+    decision_buttons =
+      if payload["decision"] == true do
+        for {label, action, style} <- [
+              {"Approve", "approve_task_decision", "primary"},
+              {"Deny", "deny_task_decision", "danger"}
+            ] do
+          %{
+            type: "button",
+            text: %{type: "plain_text", text: label},
+            action_id: action,
+            value: payload["clarification_id"],
+            style: style
+          }
+        end
+      else
+        []
+      end
+
     %{
       channel: channel,
       text: text,
@@ -525,14 +545,16 @@ defmodule DevOrchestrator.Connections.Slack do
         %{type: "section", text: %{type: "plain_text", text: text <> "\n" <> question_text}},
         %{
           type: "actions",
-          elements: [
-            %{
-              type: "button",
-              text: %{type: "plain_text", text: "Provide context"},
-              url: payload["url"],
-              action_id: "open_clarification"
-            }
-          ]
+          elements:
+            decision_buttons ++
+              [
+                %{
+                  type: "button",
+                  text: %{type: "plain_text", text: "Provide context"},
+                  url: payload["url"],
+                  action_id: "open_clarification"
+                }
+              ]
         }
       ],
       unfurl_links: false,

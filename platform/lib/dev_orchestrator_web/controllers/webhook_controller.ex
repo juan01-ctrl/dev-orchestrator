@@ -73,6 +73,36 @@ defmodule DevOrchestratorWeb.WebhookController do
   end
 
   defp acknowledge_action(conn, %{"action_id" => action_id} = action)
+       when action_id in ["approve_task_decision", "deny_task_decision"] do
+    case DevOrchestrator.Runs.answer_slack_decision(action) do
+      :ok ->
+        json(conn, %{
+          replace_original: true,
+          text:
+            if(action_id == "approve_task_decision",
+              do: "Approved. The task will resume within its existing permissions.",
+              else: "Denied. The task will resume without permission for the proposed action."
+            ),
+          blocks: []
+        })
+
+      {:error, :forbidden} ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text:
+            "Only the authorized requester or connected owner can answer this decision in its original message."
+        })
+
+      _ ->
+        json(conn, %{
+          response_type: "ephemeral",
+          text:
+            "This decision was already answered, expired, or belongs to an earlier execution. Open the task for its current status."
+        })
+    end
+  end
+
+  defp acknowledge_action(conn, %{"action_id" => action_id} = action)
        when action_id in ["create_linear_task", "apply_pr_followup"] do
     case DevOrchestrator.Intake.SlackDrafts.confirm(action) do
       {:ok, _} ->

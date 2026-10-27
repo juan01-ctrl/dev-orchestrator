@@ -217,9 +217,11 @@ defmodule DevOrchestrator.Intake.Reconciler do
           removals =
             DevOrchestrator.Intake.Batch.apply(tracked, fn item ->
               if not MapSet.member?(visible, item["issue_id"]) do
-                DevOrchestrator.Runs.Lifecycle.remove_issue(
+                confirm_missing_issue(
+                  token,
                   projects_by_id[item["project_id"]],
-                  item["issue_id"]
+                  item["issue_id"],
+                  connection_id
                 )
               else
                 {:ok, :unchanged}
@@ -234,6 +236,35 @@ defmodule DevOrchestrator.Intake.Reconciler do
         _ ->
           {:error, :provider_rejected}
       end
+    end
+  end
+
+  # A bulk list may lag a newly created issue or omit an inaccessible item. Neither
+  # is proof of removal. Only explicit remove events or a directly observed state
+  # change may cancel work; unknown visibility is retried on the next scan.
+  defp confirm_missing_issue(token, project, issue_id, connection_id) do
+    query =
+      "query($id:String!){issue(id:$id){id identifier title description url state{name} team{id} project{id} attachments{nodes{url}}}}"
+
+    case Linear.query(token, query, %{"id" => issue_id}) do
+      {:ok,
+       %{
+         "data" => %{
+           "issue" =>
+             %{"id" => ^issue_id, "state" => %{"name" => state}, "team" => %{"id" => team}} =
+                 issue
+         }
+       }}
+      when is_binary(state) and is_binary(team) ->
+        DevOrchestrator.Runs.Lifecycle.apply_issue(project, issue, %{
+          "linear_connection_id" => connection_id
+        })
+
+      {:error, _} = error ->
+        error
+
+      _ ->
+        {:error, :issue_visibility_unconfirmed}
     end
   end
 

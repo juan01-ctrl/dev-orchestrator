@@ -82,7 +82,7 @@ defmodule DevOrchestrator.Runs do
 
           clarification =
             Store.one(
-              "INSERT INTO run_clarifications(id,organization_id,project_id,run_id,lifecycle,generation,request_key,questions,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+($9 * interval '1 second')) RETURNING *",
+              "INSERT INTO run_clarifications(id,organization_id,project_id,run_id,lifecycle,generation,request_key,questions,expires_at,slack_binding) VALUES($1,$2,$3,$4,$5,$6,$7,$8,now()+($9 * interval '1 second'),$10) RETURNING *",
               [
                 Store.id(),
                 run["organization_id"],
@@ -92,7 +92,10 @@ defmodule DevOrchestrator.Runs do
                 run["generation"],
                 request_key,
                 questions,
-                if(durable, do: 86_400, else: 1_200)
+                if(durable, do: 86_400, else: 1_200),
+                if(Clarification.decision_question(questions),
+                  do: DevOrchestrator.Runs.SlackDecisions.binding(run)
+                )
               ]
             )
 
@@ -171,55 +174,7 @@ defmodule DevOrchestrator.Runs do
                    [id, scope.organization_id, run["id"]]
                  ) || Store.halt(:clarification_not_found)
 
-               if clarification["status"] != "open" or
-                    run["state"] not in [
-                      "running",
-                      "leased",
-                      "waiting_for_executor",
-                      "awaiting_input"
-                    ],
-                  do: Store.halt(:clarification_not_open)
-
-               if DateTime.compare(clarification["expires_at"], DateTime.utc_now()) != :gt do
-                 Store.halt(:clarification_expired)
-               end
-
-               answer =
-                 case Clarification.normalize_answers(
-                        clarification["questions"],
-                        params["answers"]
-                      ) do
-                   {:ok, normalized} -> normalized
-                   {:error, reason} -> Store.halt(reason)
-                 end
-
-               if run["state"] == "awaiting_input" do
-                 if get_in(run, ["snapshot", "pending_clarification_id"]) != id,
-                   do: Store.halt(:clarification_not_open)
-
-                 continuation = %{
-                   "kind" => "human_answer",
-                   "question_id" => id,
-                   "questions" => clarification["questions"],
-                   "answer" => answer
-                 }
-
-                 snapshot =
-                   run["snapshot"]
-                   |> Map.put("continuation", continuation)
-                   |> Map.put("resume_remaining_ms", run["snapshot"]["execution_remaining_ms"])
-                   |> Map.delete("pending_clarification_id")
-
-                 Store.exec(
-                   "UPDATE runs SET state='queued',generation=generation+1,sequence=0,snapshot=$2,lease_expires_at=now()+interval '90 seconds',updated_at=now() WHERE id=$1",
-                   [run["id"], snapshot]
-                 )
-               end
-
-               Store.one(
-                 "UPDATE run_clarifications SET status='answered',answer=$2,answered_at=now() WHERE id=$1 RETURNING run_id",
-                 [id, answer]
-               )
+               persist_clarification_answer!(run, clarification, params["answers"])
              end) do
         Phoenix.PubSub.broadcast(
           DevOrchestrator.PubSub,
@@ -237,6 +192,111 @@ defmodule DevOrchestrator.Runs do
   end
 
   def answer_clarification(_, _, _), do: {:error, :invalid_clarification_answer}
+
+  def answer_slack_decision(%{"action_id" => action_id} = action)
+      when action_id in ["approve_task_decision", "deny_task_decision"] do
+    result =
+      Store.transaction(fn ->
+        {run, clarification} = DevOrchestrator.Runs.SlackDecisions.lock_action!(action)
+
+        question =
+          Clarification.decision_question(clarification["questions"]) ||
+            Store.halt(:invalid_clarification)
+
+        choice = if action_id == "approve_task_decision", do: "Approve", else: "Deny"
+        answers = %{question["id"] => choice}
+        {:ok, normalized} = Clarification.normalize_answers(clarification["questions"], answers)
+
+        if clarification["status"] == "answered" do
+          same_answer_execution =
+            run["lifecycle"] == clarification["lifecycle"] and
+              (run["generation"] == clarification["generation"] or
+                 (run["generation"] == clarification["generation"] + 1 and
+                    get_in(run, ["snapshot", "continuation", "question_id"]) ==
+                      clarification["id"]))
+
+          if not same_answer_execution, do: Store.halt(:clarification_not_open)
+          if clarification["answer"] != normalized, do: Store.halt(:clarification_not_open)
+          %{"run_id" => run["id"]}
+        else
+          persist_clarification_answer!(run, clarification, answers)
+        end
+      end)
+
+    case result do
+      {:ok, row} ->
+        Phoenix.PubSub.broadcast(
+          DevOrchestrator.PubSub,
+          "run:" <> row["run_id"],
+          {:run_updated, row["run_id"]}
+        )
+
+        :ok
+
+      error ->
+        error
+    end
+  end
+
+  def answer_slack_decision(_), do: {:error, :invalid_action}
+
+  defp persist_clarification_answer!(run, clarification, answers) do
+    id = clarification["id"]
+
+    if clarification["status"] != "open" or
+         run["state"] not in ~w(running leased waiting_for_executor awaiting_input) or
+         run["lifecycle"] != clarification["lifecycle"] or
+         run["generation"] != clarification["generation"],
+       do: Store.halt(:clarification_not_open)
+
+    if DateTime.compare(clarification["expires_at"], DateTime.utc_now()) != :gt,
+      do: Store.halt(:clarification_expired)
+
+    answer =
+      case Clarification.normalize_answers(clarification["questions"], answers) do
+        {:ok, normalized} -> normalized
+        {:error, reason} -> Store.halt(reason)
+      end
+
+    if question = Clarification.decision_question(clarification["questions"]) do
+      if get_in(answer, ["answers", question["id"], "answers"]) not in [["Approve"], ["Deny"]],
+        do: Store.halt(:invalid_clarification_answer)
+    end
+
+    if run["state"] == "awaiting_input" do
+      if get_in(run, ["snapshot", "pending_clarification_id"]) != id,
+        do: Store.halt(:clarification_not_open)
+
+      continuation = %{
+        "kind" => "human_answer",
+        "question_id" => id,
+        "questions" => clarification["questions"],
+        "answer" => answer
+      }
+
+      continuation =
+        DevOrchestrator.Runs.Continuation.with_origin(
+          run["snapshot"]["continuation"],
+          continuation
+        )
+
+      snapshot =
+        run["snapshot"]
+        |> Map.put("continuation", continuation)
+        |> Map.put("resume_remaining_ms", run["snapshot"]["execution_remaining_ms"])
+        |> Map.delete("pending_clarification_id")
+
+      Store.exec(
+        "UPDATE runs SET state='queued',generation=generation+1,sequence=0,snapshot=$2,lease_expires_at=now()+interval '90 seconds',updated_at=now() WHERE id=$1",
+        [run["id"], snapshot]
+      )
+    end
+
+    Store.one(
+      "UPDATE run_clarifications SET status='answered',answer=$2,answered_at=now() WHERE id=$1 RETURNING run_id",
+      [id, answer]
+    )
+  end
 
   def subscribe(scope, id) do
     with {:ok, _run} <- get(scope, id) do
@@ -817,7 +877,14 @@ defmodule DevOrchestrator.Runs do
 
       snapshot =
         if resumable,
-          do: Map.put(run["snapshot"], "continuation", %{"kind" => "execution_retry"}),
+          do:
+            Map.put(
+              run["snapshot"],
+              "continuation",
+              DevOrchestrator.Runs.Continuation.with_origin(run["snapshot"]["continuation"], %{
+                "kind" => "execution_retry"
+              })
+            ),
           else: run["snapshot"]
 
       Store.exec(

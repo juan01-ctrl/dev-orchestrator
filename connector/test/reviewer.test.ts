@@ -17,11 +17,14 @@ test("independent review fails closed on malformed, inconclusive or contradictor
   assert.equal(normalizeReview({ ...approved, findings: [important] }, identity, ["src/app.ts"]).verdict, "request_changes");
   assert.equal(normalizeReview({ ...approved, verdict: "blocked" }, identity, []).verdict, "blocked");
   for (const value of [null, {}, { ...approved, verdict: "maybe" }, { ...approved, findings: "none" },
+    {...approved,unexpected:"claim"},
     { ...approved, findings: [{ ...important, path: "../secret" }] },
     { ...approved, findings: [{ ...important, path: "absent.ts" }] },
     { ...approved, findings: [{ ...important, line: 0 }] }]) {
     assert.throws(() => normalizeReview(value, identity, ["src/app.ts"]));
   }
+  assert.throws(()=>normalizeReview({...approved,findings:[important]},identity,["src/app.ts"],{"src/app.ts":1}));
+  assert.throws(()=>normalizeReview({...approved,findings:[{...important,unexpected:"claim"}]},identity,["src/app.ts"]));
 });
 
 test("review approval is reusable only for the exact base, head, generation and task", () => {

@@ -264,6 +264,18 @@ defmodule DevOrchestrator.Connections do
     end
   end
 
+  # Identity only: never return the OAuth token to a message or callback payload.
+  def slack_installer_id(%{"provider" => "slack"} = row) do
+    with {:ok, plaintext} <- SecretBox.open(row["secret"], row["organization_id"], key()),
+         {:ok, body} <- Jason.decode(plaintext),
+         id when is_binary(id) <- get_in(body, ["authed_user", "id"]),
+         true <- Regex.match?(~r/\A[UW][A-Z0-9]+\z/, id),
+         do: id,
+         else: (_ -> nil)
+  end
+
+  def slack_installer_id(_), do: nil
+
   defp refresh_if_expired(row, %{"expires_at" => expires} = secret) when is_integer(expires) do
     if expires <= System.system_time(:second) + 60 do
       if is_binary(secret["refresh_token"]) do

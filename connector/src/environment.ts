@@ -5,7 +5,7 @@ import { safeText, type BlockerCategory, type CheckResult } from "./task-result.
 import { setTimeout as delay } from "node:timers/promises";
 
 export type SandboxCommandResult = { exitCode: number; stdout: string; stderr: string };
-export type EnvironmentPlan = { fingerprint: string; contract?: string; setup: string[][]; validate: string[][]; configured: boolean };
+export type EnvironmentPlan = { fingerprint: string; contract?: string; setup: string[][]; validate: string[][]; configured: boolean; scriptContract?: { scripts:Record<string,unknown>; packageManager:unknown; config:string|null; manager:string } };
 
 export async function detectEnvironment(workspace: string): Promise<EnvironmentPlan> {
   const inputs = new Map<string, string>();
@@ -17,6 +17,9 @@ export async function detectEnvironment(workspace: string): Promise<EnvironmentP
     inputs.set(name, await readFile(path, "utf8"));
   }
   const fingerprint = createHash("sha256").update(JSON.stringify([...inputs])).digest("hex");
+  const pkg = inputs.has("package.json") ? JSON.parse(inputs.get("package.json")!) : {};
+  const manager = inputs.has("pnpm-lock.yaml") ? "pnpm" : inputs.has("yarn.lock") ? "yarn" : inputs.has("bun.lock") ? "bun" : "npm";
+  const scriptContract={scripts:pkg.scripts??{},packageManager:pkg.packageManager??null,config:inputs.get(".dev-orchestrator.json")??null,manager};
   const contract = createHash("sha256").update(JSON.stringify([
     inputs.get(".dev-orchestrator.json") ?? null,
     inputs.has("package.json") ? JSON.parse(inputs.get("package.json")!).scripts ?? {} : {},
@@ -30,24 +33,33 @@ export async function detectEnvironment(workspace: string): Promise<EnvironmentP
   if (inputs.has(".dev-orchestrator.json")) {
     const config = JSON.parse(inputs.get(".dev-orchestrator.json")!);
     if (!config || typeof config !== "object" || Array.isArray(config)) throw new Error("Invalid project environment configuration.");
-    return { fingerprint, contract, configured: true, setup: commands(config.setup), validate: commands(config.validate) };
+    return { fingerprint, contract, scriptContract, configured: true, setup: commands(config.setup), validate: commands(config.validate) };
   }
   if (!inputs.has("package.json")) return { fingerprint, contract, configured: false, setup: [], validate: [] };
-  const pkg = JSON.parse(inputs.get("package.json")!);
-  const manager = inputs.has("pnpm-lock.yaml") ? "pnpm" : inputs.has("yarn.lock") ? "yarn" : inputs.has("bun.lock") ? "bun" : "npm";
   const setup = manager === "npm" ? ["npm", inputs.has("package-lock.json") || inputs.has("npm-shrinkwrap.json") ? "ci" : "install", "--no-audit", "--no-fund"]
     : manager === "pnpm" ? ["pnpm", "install", "--frozen-lockfile"] : manager === "yarn" ? ["yarn", "install", /^yarn@[2-9]/.test(pkg.packageManager ?? "") ? "--immutable" : "--frozen-lockfile"] : ["bun", "install", "--frozen-lockfile"];
   const names = ["check", "typecheck", "lint", "test"].filter(name => typeof pkg.scripts?.[name] === "string");
   if (!names.length && typeof pkg.scripts?.build === "string") names.push("build");
-  return { fingerprint, contract, configured: false, setup: [setup], validate: names.map(name => [manager, "run", name]) };
+  return { fingerprint, contract, scriptContract, configured: false, setup: [setup], validate: names.map(name => [manager, "run", name]) };
 }
 
 export function validationContractError(paths: string[], original: EnvironmentPlan, current: EnvironmentPlan): string | undefined {
-  if (original.contract !== current.contract || JSON.stringify(original.validate) !== JSON.stringify(current.validate))
+  const before=original.scriptContract, after=current.scriptContract;
+  const additive=before && after && before.config===after.config && before.packageManager===after.packageManager && before.manager===after.manager &&
+    Object.entries(before.scripts).every(([key,value])=>after.scripts[key]===value) &&
+    Object.keys(after.scripts).every(key=>Object.hasOwn(before.scripts,key) || !/^(?:pre|post)|^(?:install|prepare|dependencies)$/.test(key));
+  if (!additive && (original.contract !== current.contract || JSON.stringify(original.validate) !== JSON.stringify(current.validate)))
     return "Project validation configuration changed during implementation. Review the changed configuration before retrying; existing work is preserved.";
   const codeChanged=paths.some(path=>!/(?:\.(?:md|txt|rst)|(?:^|\/)(?:LICENSE|NOTICE))$/i.test(path));
-  if (codeChanged && original.validate.length===0)
+  if (codeChanged && validationPlan(original,current).validate.length===0)
     return "Required project checks are not configured. Add explicit validation commands in .dev-orchestrator.json before retrying; existing work is preserved.";
+}
+
+export function validationPlan(original:EnvironmentPlan,current:EnvironmentPlan):EnvironmentPlan {
+  const before=original.scriptContract, after=current.scriptContract;
+  const added=before && after ? ["check","typecheck","lint","test"].filter(name=>!Object.hasOwn(before.scripts,name) && typeof after.scripts[name]==="string").map(name=>[after.manager,"run",name]) : [];
+  const commands=[...original.validate,...current.validate,...added];
+  return {...original,validate:commands.filter((argv,index)=>commands.findIndex(other=>JSON.stringify(other)===JSON.stringify(argv))===index)};
 }
 
 export function needsValidation(paths: string[], plan: EnvironmentPlan): boolean {

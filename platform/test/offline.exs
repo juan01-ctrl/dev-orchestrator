@@ -6,7 +6,7 @@ for app <- ~w(jason req plug mime plug_crypto telemetry),
     do: Code.append_path(path)
 
 for file <-
-      ~w(policy.ex runtime_config.ex execution_policy.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex connections/open_ai.ex intake/slack.ex intake/task_draft.ex intake/slack_drafts.ex intake/linear_assets.ex connections/linear.ex runs/failure_budget.ex runs/event.ex runs/lifecycle.ex delivery/retry.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex background.ex) do
+      ~w(policy.ex runtime_config.ex execution_policy.ex connections/secret_box.ex connections/http.ex connections/oauth.ex connections/github.ex connections/slack.ex connections/open_ai.ex intake/slack.ex intake/task_draft.ex intake/slack_drafts.ex intake/linear_assets.ex connections/linear.ex runs/failure_budget.ex runs/event.ex runs/continuation.ex runs/lifecycle.ex delivery/retry.ex delivery/verification.ex intake/signature.ex intake/inbox.ex intake/reconciler.ex intake/linear.ex background.ex) do
   Code.require_file("lib/dev_orchestrator/" <> file)
 end
 

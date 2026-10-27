@@ -37,7 +37,7 @@ export function stopProcess(child: ChildProcess): void {
   try { process.kill(-child.pid,"SIGKILL"); } catch { child.kill("SIGKILL"); }
 }
 
-export async function command(binary: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeout?: number; allowExitOne?: boolean } = {}): Promise<{ output: string; code: number }> {
+export async function command(binary: string, args: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal; timeout?: number; allowExitOne?: boolean; trimOutput?:boolean } = {}): Promise<{ output: string; code: number }> {
   return new Promise((resolve,reject)=>{
     const child=spawn(binary,args,{cwd:opts.cwd,env:opts.env ?? cleanGitEnv(),detached:true,stdio:["ignore","pipe","pipe"]});
     let output="",stderr="",settled=false;
@@ -52,7 +52,7 @@ export async function command(binary: string, args: string[], opts: { cwd?: stri
     child.on("close",code=>{
       clearTimeout(timer);opts.signal?.removeEventListener("abort",abort);
       if(settled)return;settled=true;
-      if(code===0 || (code===1 && opts.allowExitOne))resolve({output:output.trim(),code:code!});
+      if(code===0 || (code===1 && opts.allowExitOne))resolve({output:opts.trimOutput===false?output:output.trim(),code:code!});
       else reject(new CommandFailure(failureReason(stderr)));
     });
   });

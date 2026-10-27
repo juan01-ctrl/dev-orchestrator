@@ -29,6 +29,9 @@ defmodule DevOrchestrator.RunsTest do
         "prompt" => "Create another file"
       })
 
+    # SQL Sandbox pins now() for both inserts; tied timestamps have no FIFO order.
+    Store.exec("UPDATE runs SET created_at=now()-interval '1 second' WHERE id=$1", [run["id"]])
+
     assert {:ok, lease} = Runs.claim(ctx.executor)
     assert lease["id"] == run["id"]
     assert lease["snapshot"]["base_branch"] == "main"

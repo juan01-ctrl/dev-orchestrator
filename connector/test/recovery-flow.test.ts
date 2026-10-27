@@ -10,7 +10,8 @@ import { Journal } from "../src/journal.ts";
 import type { JournalState } from "../src/types.ts";
 import { reviewIdentity } from "../src/reviewer.ts";
 
-async function fixture(mode: "repair" | "fail" | "text" | "setup_fail" | "reported_fail" | "reported_mixed" = "repair", failures: { publish?: number; verify?: number; checkoutDuringPublish?:boolean } = {}, reviewVerdict?: "approve" | "request_changes" | "blocked") {
+type Verdict="approve"|"request_changes"|"blocked"|"invalid";
+async function fixture(mode: "repair" | "fail" | "text" | "setup_fail" | "reported_fail" | "reported_mixed" = "repair", failures: { publish?: number; verify?: number; checkoutDuringPublish?:boolean } = {}, reviewVerdict?: Verdict|Verdict[], question?:any) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "orchestrator-flow-")));
   const source = join(root, "source"), remote = join(root, "remote.git");
   await mkdir(source);
@@ -25,6 +26,11 @@ import readline from 'node:readline'; import {writeFileSync,appendFileSync,mkdir
 const send=o=>process.stdout.write(JSON.stringify(o)+'\\n');let turn=0;
 readline.createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);if(m.id===undefined)return;
+ if(m.id==='decision-request'){
+  appendFileSync(${JSON.stringify(observation)},JSON.stringify({method:'decision-answer',params:m.result})+'\\n');
+  send({method:'item/completed',params:{threadId:'persistent-task-thread',item:{type:'agentMessage',text:JSON.stringify({outcome:'completed',summary:'Continued autonomously',validation:[],blocker:null})}}});
+  return send({method:'turn/completed',params:{threadId:'persistent-task-thread',turn:{status:'completed'}}});
+ }
  appendFileSync(${JSON.stringify(observation)},JSON.stringify({method:m.method,params:m.params})+'\\n');
  if(m.method==='initialize')return send({id:m.id,result:{}});
  if(m.method==='account/read')return send({id:m.id,result:{account:{type:'chatgpt'}}});
@@ -37,6 +43,8 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  }
  if(m.method==='turn/start'){
   turn++;writeFileSync(${JSON.stringify(mode === "text" ? "prueba.txt" : "app.js")},${mode === "text" ? JSON.stringify("esto es una prueba") : "turn===1?'broken':'fixed'"});
+  if(${Boolean(question)} && !${Boolean(question?.structured)}){send({id:m.id,result:{}});return send({id:'decision-request',method:'item/tool/requestUserInput',params:${JSON.stringify(question??{})}});}
+  if(${Boolean(question?.structured)}){send({id:m.id,result:{}});send({method:'item/completed',params:{threadId:'persistent-task-thread',item:{type:'agentMessage',text:JSON.stringify({outcome:'blocked',decision:${JSON.stringify(question?.questions?.[0]??null)},blocker:{category:'missing_context',message:'Human decision required',question:'Approve the scope change?'}})}}});return send({method:'turn/completed',params:{threadId:'persistent-task-thread',turn:{status:'completed'}}});}
   send({id:m.id,result:{}});send({method:'item/completed',params:{threadId:'persistent-task-thread',item:{type:'agentMessage',text:JSON.stringify({outcome:'completed',summary:'Added the requested change',validation:${mode.startsWith("reported_")?"[{command:'pytest',status:'failed'}]":"[]"},blocker:null})}}});
   return send({method:'turn/completed',params:{threadId:'persistent-task-thread',turn:{status:'completed'}}});
  }
@@ -49,7 +57,9 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   const events: any[] = [], publications: string[] = [];
   let publicationAttempts=0,verificationAttempts=0,reviews=0,publishTokens=0,comments=0,lookups=0;
   if(reviewVerdict)state.lease.snapshot!.review_policy={version:1};
+  if(question)state.lease.snapshot!.workflow_version=2;
   const api = { post: async (path: string, payload: any) => {
+    if(path.endsWith('/clarifications/request')){events.push({kind:'question',data:payload});return {id:'decision-1',status:'awaiting_input'};}
     if (path.endsWith("github-token")) {
       if(payload.purpose==="publish")publishTokens++;
       if(failures.checkoutDuringPublish && state.phase==="publish" && payload.purpose==="checkout")throw new Error("Checkout transport interrupted");
@@ -64,7 +74,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   } };
   const run = () => execute({ version: 2, server: "http://localhost:4100", token: "test", codexBinary: binary }, api, journal, state, performance.now(), new AbortController().signal, {
     dataRoot: root, repositories,
-    reviewer: reviewVerdict ? async input => { reviews++; return { ...reviewIdentity(input.lease,input.commit,input.baseline), verdict:reviewVerdict, summary:"Independent review",findings:[],limitations:["Inspection only"] }; } : undefined,
+    reviewer: reviewVerdict ? async input => { reviews++;const verdict=Array.isArray(reviewVerdict)?reviewVerdict[Math.min(reviews-1,reviewVerdict.length-1)]:reviewVerdict;if(verdict==="invalid")throw new Error("Malformed review");return { ...reviewIdentity(input.lease,input.commit,input.baseline), verdict, summary:"Independent review",findings:verdict==="request_changes"?[{severity:"important",path:"prueba.txt",line:1,description:"Missing required error state",evidence:"No exception handling reaches the error display"}]:[],limitations:["Inspection only"] }; } : undefined,
     publisherFactory: context => ({
       reviewSnapshot: async (_commit:string, inspect:(path:string)=>Promise<unknown>) => inspect(context.workspace),
       changedFiles: async () => execFileSync("git", ["-C", context.workspace, "status", "--porcelain"], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(line => line.slice(3)),
@@ -85,9 +95,75 @@ test("important or inconclusive independent review blocks before obtaining publi
   }
 });
 
+test("routine agent questions never create a human wait",async()=>{
+  const f=await fixture("text",{},undefined,{questions:[{id:"framework",header:"Framework",question:"Which framework?"}]});
+  try {await f.run();assert.equal(f.events.filter(e=>e.kind==="question").length,0);assert.equal(f.publications.length,1);const answer=(await f.observations()).find(e=>e.method==="decision-answer");assert.match(answer.params.answers.framework.answers[0],/autonomously/);}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("important binary decisions park the conversation before any publication",async()=>{
+  const q={id:"scope",header:"Scope",question:"Approve adding billing to the requested dashboard? This materially expands its scope.",options:[{label:"Approve",description:"Add billing"},{label:"Deny",description:"Keep the approved dashboard scope"}]};
+  const f=await fixture("text",{},undefined,{questions:[q],turnId:"important-turn"});
+  try {await f.run();assert.equal(f.events.filter(e=>e.kind==="question").length,1);assert.equal(f.publications.length,0);assert.equal(await f.journal.load(),null);const {existsSync}=await import("node:fs");assert.ok(existsSync(join(f.journal.continuationRoot,`${f.state.lease.id}-1`,"active.json")));}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("structured decision output parks safely when interactive input is unavailable",async()=>{
+  const q={id:"scope",header:"Scope",question:"Approve adding billing? This expands the requested scope.",options:[{label:"Approve",description:"Add billing"},{label:"Deny",description:"Keep original scope"}]};
+  const f=await fixture("text",{},undefined,{structured:true,questions:[q]});
+  try {await f.run();assert.equal(f.events.filter(e=>e.kind==="question").length,1);assert.equal(f.publications.length,0);assert.equal(await f.journal.load(),null);const {existsSync}=await import("node:fs");assert.ok(existsSync(join(f.journal.continuationRoot,`${f.state.lease.id}-1`,"active.json")));}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("independent findings are repaired in the same task and freshly reviewed before publication",async()=>{
+  const f=await fixture("text",{},["request_changes","approve"]);
+  try {
+    await f.run();
+    assert.equal(f.publications.length,1);assert.equal(f.reviewStats().reviews,2);
+    const turns=(await f.observations()).filter(x=>x.method==="turn/start");
+    assert.equal(turns.length,2);assert.match(turns[1].params.input[0].text,/Missing required error state/);
+    assert.equal(f.state.review_repairs,1);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("persistent review findings stop after two repairs without publishing",async()=>{
+  const f=await fixture("text",{},"request_changes");
+  try {await f.run();assert.equal(f.publications.length,0);assert.equal(f.reviewStats().reviews,3);assert.equal(f.state.review_repairs,2);assert.equal((await f.observations()).filter(x=>x.method==="turn/start").length,3);assert.equal(f.events.at(-1).kind,"blocked");}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("an incomplete review gets one fresh retry without rerunning implementation",async()=>{
+  const f=await fixture("text",{},["invalid","approve"]);
+  try {await f.run();assert.equal(f.publications.length,1);assert.equal(f.reviewStats().reviews,2);assert.equal((await f.observations()).filter(x=>x.method==="turn/start").length,1);}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("an inconclusive verdict is rechecked once before stopping the task",async()=>{
+  const f=await fixture("text",{},["blocked","approve"]);
+  try {await f.run();assert.equal(f.publications.length,1);assert.equal(f.reviewStats().reviews,2);}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
 test("publication retry reuses only the exact independent approval without rerunning implementation", async () => {
   const f=await fixture("text",{publish:1},"approve");
   try {await assert.rejects(f.run());await f.run();assert.equal(f.reviewStats().reviews,1);assert.equal(f.publications.length,1);assert.match(f.publications[0],/Independent review/);assert.equal((await f.observations()).filter(x=>x.method==="turn/start").length,1);}
+  finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("recovery processes a saved blocking review before considering another approval",async()=>{
+  const f=await fixture("text",{publish:1},"approve");
+  try {
+    await assert.rejects(f.run());
+    f.state.review={...f.state.review!,verdict:"request_changes",findings:[{severity:"important",path:"prueba.txt",line:1,description:"Missing error state",evidence:"No error display path"}]};
+    await f.journal.save(f.state);await f.run();
+    assert.equal((await f.observations()).filter(e=>e.method==="turn/start").length,2);
+    assert.equal(f.state.review_repairs,1);assert.equal(f.publications.length,1);
+  } finally {await rm(f.root,{recursive:true,force:true});}
+});
+
+test("interrupted review attempts consume a persisted total budget before launch",async()=>{
+  const f=await fixture("text",{},"approve");
+  try {f.state.review_attempts=4;await f.run();assert.equal(f.reviewStats().reviews,0);assert.equal(f.publications.length,0);assert.equal(f.events.at(-1).kind,"blocked");}
   finally {await rm(f.root,{recursive:true,force:true});}
 });
 

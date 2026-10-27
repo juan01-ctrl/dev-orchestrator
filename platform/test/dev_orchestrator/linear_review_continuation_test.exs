@@ -42,7 +42,14 @@ defmodule DevOrchestrator.LinearReviewContinuationTest do
       result
     ])
 
-    %{project: project.data, issue: issue, run_id: id, snapshot: snapshot, result: result}
+    %{
+      scope: scope,
+      project: project.data,
+      issue: issue,
+      run_id: id,
+      snapshot: snapshot,
+      result: result
+    }
   end
 
   test "review-state reconciliation preserves approved PR continuations without creating another task",
@@ -94,6 +101,61 @@ defmodule DevOrchestrator.LinearReviewContinuationTest do
                  ctx.project,
                  put_in(ctx.issue, ["state", "name"], "In Review")
                )
+    end
+  end
+
+  test "approval and denial preserve an existing PR followup through reconciliation", ctx do
+    alias DevOrchestrator.{Executors, Runs}
+    {:ok, code} = Executors.create_enrollment(ctx.scope)
+    {:ok, %{token: token}} = Executors.enroll(code, %{"name" => "Runner"})
+    {:ok, executor} = Executors.authenticate(token)
+    :ok = Executors.bind(ctx.scope, executor["id"], ctx.project["id"])
+
+    for choice <- ["Approve", "Deny"] do
+      snapshot =
+        ctx.snapshot
+        |> Map.put("execution_deadline_at_ms", System.system_time(:millisecond) + 1_200_000)
+
+      Store.exec(
+        "UPDATE runs SET state='running',generation=1,executor_id=$2,lease_expires_at=now()+interval '90 seconds',snapshot=$3,result=$4 WHERE id=$1",
+        [ctx.run_id, executor["id"], snapshot, ctx.result]
+      )
+
+      lease = %{"id" => ctx.run_id, "lifecycle" => 1, "generation" => 1}
+
+      questions = [
+        %{
+          "id" => "scope",
+          "header" => "Scope",
+          "question" => "Approve the proposed material scope change?",
+          "options" => [
+            %{"label" => "Approve", "description" => "Expand scope"},
+            %{"label" => "Deny", "description" => "Keep original scope"}
+          ]
+        }
+      ]
+
+      assert {:ok, %{id: id, status: "awaiting_input"}} =
+               Runs.request_clarification(executor, lease, %{
+                 "questions" => questions,
+                 "turnId" => choice,
+                 "durable" => true
+               })
+
+      assert :ok = Runs.answer_clarification(ctx.scope, id, %{"answers" => %{"scope" => choice}})
+
+      assert {:ok, %{result: :unchanged}} =
+               Lifecycle.apply_issue(
+                 ctx.project,
+                 put_in(ctx.issue, ["state", "name"], "In Review")
+               )
+
+      run = Store.one("SELECT * FROM runs WHERE id=$1", [ctx.run_id])
+      assert run["state"] == "queued"
+      assert get_in(run, ["snapshot", "continuation", "origin", "kind"]) == "slack_followup"
+
+      assert get_in(run, ["snapshot", "continuation", "answer", "answers", "scope", "answers"]) ==
+               [choice]
     end
   end
 end

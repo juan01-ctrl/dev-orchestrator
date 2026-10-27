@@ -11,6 +11,11 @@ defmodule DevOrchestrator.EventTest do
 
   alias DevOrchestrator.Runs.Event
 
+  test "review repair progress is accepted and visible as an autonomous repair" do
+    assert {:ok, %{"stage" => "review_repairing"}} =
+             Event.sanitize(%{}, "progress", %{"stage" => "review_repairing"})
+  end
+
   test "candidate events use the frozen attempt branch" do
     run = %{
       "id" => "run-1",

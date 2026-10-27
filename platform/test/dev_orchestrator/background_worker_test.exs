@@ -53,10 +53,11 @@ defmodule DevOrchestrator.BackgroundWorkerTest do
          operation: fn -> send(owner, :swept) end}
       )
 
-    assert_receive :slow_started
-    assert_receive :swept
-    assert_receive :swept
-    assert_receive :slow_started
+    # Assert eventual recovery without treating a busy scheduler as a 100ms SLA.
+    assert_receive :slow_started, 1_000
+    assert_receive :swept, 1_000
+    assert_receive :swept, 1_000
+    assert_receive :slow_started, 1_000
     assert Process.alive?(slow)
     assert Process.alive?(fast)
   end

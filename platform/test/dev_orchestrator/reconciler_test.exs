@@ -9,7 +9,7 @@ defmodule DevOrchestrator.ReconcilerTest do
     {:ok, project} =
       Projects.create_project(scope, %{"name" => "App", "repository" => "acme/app"})
 
-    {:ok, _} = Projects.update_project(scope, project.id, %{"linear_team" => "team-1"})
+    {:ok, project} = Projects.update_project(scope, project.id, %{"linear_team" => "team-1"})
     id = Store.id()
 
     secret =
@@ -31,7 +31,56 @@ defmodule DevOrchestrator.ReconcilerTest do
 
     old = Application.get_env(:dev_orchestrator, :provider_transport)
     on_exit(fn -> Application.put_env(:dev_orchestrator, :provider_transport, old) end)
-    %{connection: id}
+    %{connection: id, project: project}
+  end
+
+  test "bulk omission verifies the issue directly before cancelling active work", ctx do
+    issue = %{
+      "id" => "active-issue",
+      "title" => "Still active",
+      "state" => %{"name" => "Todo"},
+      "team" => %{"id" => "team-1"}
+    }
+
+    {:ok, %{run_id: run_id}} = DevOrchestrator.Runs.Lifecycle.apply_issue(ctx.project.data, issue)
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      body =
+        if String.contains?(opts[:json][:query], "issue(id:"),
+          do: %{"issue" => issue},
+          else: %{"issues" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => false}}}
+
+      {:ok, %{status: 200, body: %{"data" => body}}}
+    end)
+
+    assert :ok = Reconciler.tick(ctx.connection)
+    assert Store.one("SELECT state FROM runs WHERE id=$1", [run_id])["state"] == "queued"
+
+    assert Store.one("SELECT activation FROM linear_issue_lifecycles WHERE run_id=$1", [run_id])[
+             "activation"
+           ] == 1
+  end
+
+  test "unconfirmed direct visibility preserves active work and remains retryable", ctx do
+    issue = %{
+      "id" => "active-issue",
+      "state" => %{"name" => "Todo"},
+      "team" => %{"id" => "team-1"}
+    }
+
+    {:ok, %{run_id: run_id}} = DevOrchestrator.Runs.Lifecycle.apply_issue(ctx.project.data, issue)
+
+    Application.put_env(:dev_orchestrator, :provider_transport, fn opts ->
+      body =
+        if String.contains?(opts[:json][:query], "issue(id:"),
+          do: %{"issue" => nil},
+          else: %{"issues" => %{"nodes" => [], "pageInfo" => %{"hasNextPage" => false}}}
+
+      {:ok, %{status: 200, body: %{"data" => body}}}
+    end)
+
+    assert {:error, :issue_visibility_unconfirmed} = Reconciler.tick(ctx.connection)
+    assert Store.one("SELECT state FROM runs WHERE id=$1", [run_id])["state"] == "queued"
   end
 
   test "returned application errors leave the inbox receipt and scan cursor retryable", ctx do

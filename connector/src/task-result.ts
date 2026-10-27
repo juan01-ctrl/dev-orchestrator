@@ -1,6 +1,7 @@
+import { importantDecision, type Question } from "./decisions.ts";
 export type CheckResult = { command: string; status: "passed" | "failed" | "not_run" };
 export type BlockerCategory = "missing_context" | "environment_setup_failed" | "validation_failed" | "authentication_required" | "network_unavailable" | "execution_failed" | "execution_timeout" | "recovery_exhausted";
-export type TaskResult = { outcome: "completed" | "blocked"; summary: string; validation: CheckResult[]; changes?: string[]; risks?: string[]; verification_notes?: string[]; blocker: { category: BlockerCategory; message: string; question: string } | null };
+export type TaskResult = { outcome: "completed" | "blocked"; summary: string; validation: CheckResult[]; changes?: string[]; risks?: string[]; verification_notes?: string[]; decision?:Question; blocker: { category: BlockerCategory; message: string; question: string } | null };
 const categories: BlockerCategory[] = ["missing_context", "environment_setup_failed", "validation_failed", "authentication_required", "network_unavailable", "execution_failed", "execution_timeout", "recovery_exhausted"];
 
 export function safeText(value: unknown, limit = 1_000): string {
@@ -17,16 +18,20 @@ export function normalizeTaskResult(value: unknown): TaskResult {
   const validation: CheckResult[] = Array.isArray(result.validation) ? result.validation.slice(0, 12).flatMap(check =>
     check && typeof check.command === "string" && ["passed", "failed", "not_run"].includes(check.status)
       ? [{ command: safeText(check.command, 200), status: check.status }] : []) : [];
-  const blocked = result.outcome === "blocked";
-  const question = safeText(result.blocker?.question, 600).trim();
-  let category = categories.includes(result.blocker?.category as BlockerCategory) ? result.blocker!.category : "execution_failed";
+  const proposed=importantDecision({questions:[result.decision]})?.questions[0];
+  if(result.decision!==undefined && result.decision!==null && !proposed)throw new Error("Invalid important decision result.");
+  const decision=proposed?{...proposed,question:safeText(proposed.question,600),options:proposed.options.map(o=>({label:o.label,description:safeText(o.description,200)}))}:undefined;
+  const blocked = result.outcome === "blocked" || !!decision;
+  const question = decision?.question ?? safeText(result.blocker?.question, 600).trim();
+  let category:BlockerCategory = decision?"missing_context":categories.includes(result.blocker?.category as BlockerCategory) ? result.blocker!.category : "execution_failed";
   if (category === "missing_context" && !question) category = "execution_failed";
   return {
     outcome: blocked ? "blocked" : "completed",
     summary: safeText(result.summary, 1_000).trim() || (blocked ? "The task could not complete." : "The requested changes are ready for review."),
     validation,
+    ...(decision?{decision}:{}),
     ...Object.fromEntries(["changes", "risks", "verification_notes"].filter(key => Array.isArray((result as any)[key])).map(key => [key, (result as any)[key].slice(0, 8).filter((v: unknown) => typeof v === "string").map((v: string) => safeText(v, 500))])),
-    blocker: blocked ? { category, message: safeText(result.blocker?.message, 600).trim() || "The agent stopped without a specific blocker. Review its execution activity.", question } : null
+    blocker: blocked ? { category, message: decision?"An important human decision is required before continuing.":safeText(result.blocker?.message, 600).trim() || "The agent stopped without a specific blocker. Review its execution activity.", question } : null
   };
 }
 
@@ -72,10 +77,11 @@ export function formatTaskReport(result: TaskResult, context?: PRContext): strin
 }
 
 export const taskResultSchema = {
-  type: "object", additionalProperties: false, required: ["outcome", "summary", "validation", "blocker", "changes", "risks", "verification_notes"],
+  type: "object", additionalProperties: false, required: ["outcome", "summary", "validation", "blocker", "changes", "risks", "verification_notes", "decision"],
   properties: {
     outcome: { type: "string", enum: ["completed", "blocked"] }, summary: { type: "string" },
     changes: { type: "array", items: { type: "string" } }, risks: { type: "array", items: { type: "string" } }, verification_notes: { type: "array", items: { type: "string" } },
+    decision: {anyOf:[{type:"null"},{type:"object",additionalProperties:false,required:["id","header","question","options"],properties:{id:{type:"string",pattern:"^[a-zA-Z0-9_-]{1,80}$"},header:{type:"string",enum:["Data","Security","Commitment","Scope"]},question:{type:"string",minLength:1,maxLength:600},options:{type:"array",minItems:2,maxItems:2,items:{type:"object",additionalProperties:false,required:["label","description"],properties:{label:{type:"string",enum:["Approve","Deny"]},description:{type:"string",minLength:1,maxLength:200}}}}}}]},
     validation: { type: "array", items: { type: "object", additionalProperties: false, required: ["command", "status"], properties: { command: { type: "string" }, status: { type: "string", enum: ["passed", "failed", "not_run"] } } } },
     blocker: { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, required: ["category", "message", "question"], properties: { category: { type: "string", enum: categories }, message: { type: "string" }, question: { type: "string" } } }] }
   }

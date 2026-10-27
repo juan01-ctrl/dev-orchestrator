@@ -18,6 +18,10 @@ export type JournalState = {
   environment_plan?: import("./environment.ts").EnvironmentPlan;
   continuation_started?: boolean;
   review?: import("./reviewer.ts").CandidateReview;
+  review_repairs?:number;
+  review_failures?:number;
+  review_attempts?:number;
+  resume_interrupted_turn?:boolean;
   executed_checks?: import("./task-result.ts").CheckResult[];
   summary_comment?: { commit: string; status: "ready" | "pending" | "sent" | "ambiguous" | "rejected"; body?:string; context?:import("./publisher.ts").PublicationContext };
 };

@@ -136,6 +136,9 @@ defmodule DevOrchestratorWeb.DashboardComponents do
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "environment_preparing"}}),
     do: "Preparing project dependencies"
 
+  def activity_title(%{"kind" => "progress", "data" => %{"stage" => "review_repairing"}}),
+    do: "Repairing review findings"
+
   def activity_title(%{"kind" => "progress", "data" => %{"stage" => "checks_passed"}}),
     do: "Project check passed"
 
@@ -259,6 +262,10 @@ defmodule DevOrchestratorWeb.DashboardComponents do
         "data" => %{"stage" => "environment_preparing"}
       }),
       do: "Installing dependencies inside the project sandbox. Unchanged environments are reused."
+
+  def activity_description(%{"kind" => "progress", "data" => %{"stage" => "review_repairing"}}),
+    do:
+      "The agent is checking the review evidence and repairing confirmed defects before another independent review."
 
   def activity_description(%{"kind" => "progress", "data" => %{"stage" => "checks_passed"}}),
     do: "The latest detected project check exited successfully."

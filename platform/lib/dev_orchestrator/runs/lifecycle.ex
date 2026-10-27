@@ -160,7 +160,7 @@ defmodule DevOrchestrator.Runs.Lifecycle do
 
     if run && run["state"] in @active_run_states &&
          not review_continuation?(project, issue, run) do
-      result = %{"summary" => "Cancelled because the Linear issue left an active workflow state."}
+      result = %{"summary" => cancellation_reason(project, issue)}
 
       cancelled =
         Store.one(
@@ -172,6 +172,21 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       %{result: :cancelled, run_id: run["id"], activation: lifecycle["activation"]}
     else
       %{result: :unchanged, activation: lifecycle["activation"]}
+    end
+  end
+
+  defp cancellation_reason(project, issue) do
+    cond do
+      get_in(issue, ["state", "name"]) == "Removed" ->
+        "Cancelled because the Linear issue was explicitly removed."
+
+      get_in(issue, ["team", "id"]) != project["linear_team"] or
+          (not is_nil(project["linear_project"]) and
+             get_in(issue, ["project", "id"]) != project["linear_project"]) ->
+        "Cancelled because the Linear issue no longer belongs to this project's configured team or project."
+
+      true ->
+        "Cancelled because the Linear issue left an active workflow state."
     end
   end
 
@@ -187,7 +202,7 @@ defmodule DevOrchestrator.Runs.Lifecycle do
       (is_nil(project["linear_project"]) or
          get_in(issue, ["project", "id"]) == project["linear_project"]) and
       snapshot["workflow_version"] == 2 and
-      get_in(snapshot, ["continuation", "kind"]) in ~w(slack_followup pr_feedback) and
+      DevOrchestrator.Runs.Continuation.pr_work?(snapshot["continuation"]) and
       is_binary(get_in(snapshot, ["resume_candidate", "pr_url"])) and
       is_binary(snapshot["resume_head"]) and
       snapshot["resume_head"] == get_in(run, ["result", "commit"])

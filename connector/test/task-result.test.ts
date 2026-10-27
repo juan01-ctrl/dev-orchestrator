@@ -48,3 +48,10 @@ test("human PR context separates agent claims from connector-executed validation
   assert.match(report,/Connector-executed checks[\s\S]*npm test: passed[\s\S]*Agent-reported checks[\s\S]*browser check: passed/);
   assert.match(report,/Agent-reported checks are claims/);
 });
+
+test("a structured important decision cannot be normalized into completed work",()=>{
+  const decision={id:"scope",header:"Scope",question:"Approve expanding scope to paid billing? This introduces an external commitment.",options:[{label:"Approve",description:"Add billing scope"},{label:"Deny",description:"Keep original scope"}]};
+  const result=normalizeTaskResult({outcome:"completed",decision});
+  assert.equal(result.outcome,"blocked");assert.equal(result.decision?.id,"scope");assert.equal(result.blocker?.category,"missing_context");
+  assert.throws(()=>normalizeTaskResult({outcome:"completed",decision:{...decision,header:"Unknown"}}),/decision/i);
+});

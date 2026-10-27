@@ -18,7 +18,11 @@ test("executor setup commands use the packaged connector release", async () => {
     "utf8",
   );
 
-  assert.match(dashboard, new RegExp(`dev-orchestrator-connector@${manifest.version}`));
+  const commands = [...dashboard.matchAll(/npx --yes (\S+) (pair|run)\b/g)];
+  assert.equal(commands.length, 4, "Check both displayed commands and both copy buttons");
+  for (const [, release] of commands) {
+    assert.equal(release, `${manifest.name}@${manifest.version}`);
+  }
 });
 
 test("CLI wrapper targets built JavaScript instead of stripping TypeScript in node_modules", async () => {

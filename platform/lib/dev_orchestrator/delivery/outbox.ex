@@ -49,6 +49,7 @@ defmodule DevOrchestrator.Delivery.Outbox do
       "run_id" => run["id"],
       "clarification_id" => clarification["id"],
       "questions" => clarification["questions"],
+      "decision" => is_map(clarification["slack_binding"]),
       "snapshot" => run["snapshot"] || %{},
       "url" => Application.fetch_env!(:dev_orchestrator, :public_url) <> "/app/runs/" <> run["id"]
     }

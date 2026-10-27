@@ -19,6 +19,7 @@ test('a process failure or failing unmapped test blocks the whole gate', () => {
   assert.equal(assess(scenarios, [good], 1).passed, false);
   assert.equal(assess(scenarios, [good, { name: 'other', status: 'failed', duration_ms: 0 }], 0).passed, false);
   assert.equal(assess(scenarios, [good, { name: 'other', status: 'skipped', duration_ms: 0 }], 0).passed, false);
+  assert.deepEqual(assess(scenarios,[good,{name:'other',status:'failed',duration_ms:0}],1).failed_tests,['other']);
 });
 
 test('malformed evidence cannot masquerade as a completed test', () => {
