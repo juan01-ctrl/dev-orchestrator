@@ -81,6 +81,8 @@
     {"id":"continuation.decision_pr_followup","engine":"platform","category":"continuation","name":"DevOrchestrator.LinearReviewContinuationTest::test approval and denial preserve an existing PR followup through reconciliation"},
     {"id":"execution.claim_snapshot","engine":"platform","category":"authorization","name":"DevOrchestrator.RunsTest::test claim snapshots rules and respects project concurrency"},
     {"id":"decisions.structured_fallback","engine":"connector","category":"continuation","name":"structured decision output parks safely when interactive input is unavailable"},
+    {"id":"review.validation_evidence","engine":"connector","category":"validation","name":"inspection review receives candidate-bound executor checks without implementation claims"},
+    {"id":"review.evidence_handoff","engine":"connector","category":"recovery","name":"review receives connector validation and blocked results expose the review limitation"},
     {"id":"decisions.unresolved_completion","engine":"connector","category":"authorization","name":"a structured important decision cannot be normalized into completed work"}
   ]
 }

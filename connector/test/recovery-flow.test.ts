@@ -54,7 +54,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   await chmod(binary, 0o755);
   const state: JournalState = { lease: { id: "22222222-2222-4222-8222-222222222222", project_id: "11111111-1111-4111-8111-111111111111", generation: 1, lifecycle: 1, title: "Implement change", prompt: "Make the change", snapshot: { repository: "acme/app", base_branch: "main", instructions: "" } }, sequence: 0 };
   const journal = new Journal(join(root, "slot")), repositories = new RepositoryWorkspace({ remoteURL: () => remote });
-  const events: any[] = [], publications: string[] = [];
+  const events: any[] = [], publications: string[] = [], reviewInputs: any[] = [];
   let publicationAttempts=0,verificationAttempts=0,reviews=0,publishTokens=0,comments=0,lookups=0;
   if(reviewVerdict)state.lease.snapshot!.review_policy={version:1};
   if(question)state.lease.snapshot!.workflow_version=2;
@@ -74,7 +74,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   } };
   const run = () => execute({ version: 2, server: "http://localhost:4100", token: "test", codexBinary: binary }, api, journal, state, performance.now(), new AbortController().signal, {
     dataRoot: root, repositories,
-    reviewer: reviewVerdict ? async input => { reviews++;const verdict=Array.isArray(reviewVerdict)?reviewVerdict[Math.min(reviews-1,reviewVerdict.length-1)]:reviewVerdict;if(verdict==="invalid")throw new Error("Malformed review");return { ...reviewIdentity(input.lease,input.commit,input.baseline), verdict, summary:"Independent review",findings:verdict==="request_changes"?[{severity:"important",path:"prueba.txt",line:1,description:"Missing required error state",evidence:"No exception handling reaches the error display"}]:[],limitations:["Inspection only"] }; } : undefined,
+    reviewer: reviewVerdict ? async input => { reviewInputs.push(input);reviews++;const verdict=Array.isArray(reviewVerdict)?reviewVerdict[Math.min(reviews-1,reviewVerdict.length-1)]:reviewVerdict;if(verdict==="invalid")throw new Error("Malformed review");return { ...reviewIdentity(input.lease,input.commit,input.baseline), verdict, summary:"Independent review",findings:verdict==="request_changes"?[{severity:"important",path:"prueba.txt",line:1,description:"Missing required error state",evidence:"No exception handling reaches the error display"}]:[],limitations:["Inspection only"] }; } : undefined,
     publisherFactory: context => ({
       reviewSnapshot: async (_commit:string, inspect:(path:string)=>Promise<unknown>) => inspect(context.workspace),
       changedFiles: async () => execFileSync("git", ["-C", context.workspace, "status", "--porcelain"], { encoding: "utf8" }).trim().split("\n").filter(Boolean).map(line => line.slice(3)),
@@ -84,7 +84,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
       publish: async (_title: string, body: string) => { if(++publicationAttempts<=(failures.publish??0))throw new Error("GitHub transport interrupted"); publications.push(body); return { repository: "acme/app", branch: context.branch, base_branch: "main", commit: "a".repeat(40), pr_url: "https://github.com/acme/app/pull/1" }; }
     } as any)
   });
-  return { root, state, journal, events, publications, run, reviewStats:()=>({reviews,publishTokens,comments,lookups}), observations: async () => (await readFile(observation, "utf8")).trim().split("\n").map(line => JSON.parse(line)) };
+  return { root, state, journal, events, publications, reviewInputs, run, reviewStats:()=>({reviews,publishTokens,comments,lookups}), observations: async () => (await readFile(observation, "utf8")).trim().split("\n").map(line => JSON.parse(line)) };
 }
 
 test("important or inconclusive independent review blocks before obtaining publish credentials", async () => {
@@ -93,6 +93,17 @@ test("important or inconclusive independent review blocks before obtaining publi
     try {await f.run();assert.equal(f.publications.length,0);assert.equal(f.reviewStats().publishTokens,0);assert.equal(f.events.at(-1).kind,"blocked");assert.equal(f.events.at(-1).data.category,"validation_failed");}
     finally {await rm(f.root,{recursive:true,force:true});}
   }
+});
+
+test("review receives connector validation and blocked results expose the review limitation", async () => {
+  const f=await fixture("repair",{},"blocked");
+  try {
+    await f.run();
+    assert.equal(f.reviewInputs.length,2);
+    assert.deepEqual(f.reviewInputs[0].executedChecks,[{command:"npm run check",status:"passed"}]);
+    assert.equal(f.publications.length,0);
+    assert.match(f.events.at(-1).data.summary,/Inspection only/);
+  } finally {await rm(f.root,{recursive:true,force:true});}
 });
 
 test("routine agent questions never create a human wait",async()=>{

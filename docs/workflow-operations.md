@@ -123,11 +123,11 @@ Retained successful PR worktrees last seven days; ordinary
 successful worktrees retain the existing one-day cleanup policy. Do not delete
 private continuation checkpoints while their pauses or review windows are active.
 
-## Independent candidate review (connector 0.4.0)
+## Independent candidate review (connector 0.4.1)
 
-Release `@juan01-ctrl/dev-orchestrator-connector@0.4.0` with its configured public
+Release `@juan01-ctrl/dev-orchestrator-connector@0.4.1` with its configured public
 access. Deploy the server and its Slack decision migration before starting the new
-connector. Then stop the old connector cleanly and start 0.4.0 using the existing
+connector. Then stop the old connector cleanly and start 0.4.1 using the existing
 config and runtime directory; do not pair again or run two processes against the
 same runtime. No new provider permission is needed. Source changes do not publish npm.
 When changing the package name or version, update all dashboard pairing/start
@@ -150,6 +150,14 @@ the same immutable task model; this feature does not change model routing.
 Reviewer commands ignore host Git configuration/attributes and cannot approve
 permission escalation. Publication checks the reviewed SHA again inside the trusted
 push operation, after any asynchronous credential acquisition.
+
+The reviewer receives the connector's recorded validation command outcomes for the
+candidate SHA, separately from untrusted task content. It receives no implementation
+conversation, self-assessment or agent-reported checks. Passing commands do not
+prove coverage or require approval. The absence of dependencies in the isolated
+review checkout is an expected limitation; missing required acceptance evidence
+or actionable defects may still block publication. Blocked task summaries include
+the reviewer's reason and limitations instead of only a generic failure message.
 
 Review v1 is inspection-only: it does not install dependencies or claim another
 build, browser test or visual verification. There is no writable source/scratch

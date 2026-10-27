@@ -45,6 +45,17 @@ test("review input carries the approved request but not implementation persuasio
   assert.doesNotMatch(prompt, /implementation summary|all tests passed|implementer believes/i);
 });
 
+test("inspection review receives candidate-bound executor checks without implementation claims", () => {
+  const prompt = reviewPrompt({ title:"Dashboard", prompt:"Add filters", instructions:"", ...identity,
+    executedChecks:[{command:"npm run check",status:"passed"},{command:"npm run test",status:"passed"}] });
+  assert.match(prompt, /Connector-executed validation/);
+  assert.match(prompt, new RegExp(identity.commit));
+  assert.match(prompt, /"command":"npm run check","status":"passed"/);
+  assert.match(prompt, /"command":"npm run test","status":"passed"/);
+  assert.match(prompt, /do not block solely/i);
+  assert.doesNotMatch(prompt, /implementation summary|implementer believes/i);
+});
+
 test("candidate review clone has independent objects, exact refs and no runtime files or remotes", async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "review-isolation-test-")));
   const git = (cwd: string, args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -96,7 +107,7 @@ if(m.method==='turn/start'){if(m.params.input[0].text.includes('tamper-fixture')
 if(m.id!==undefined)send({id:m.id,result:{data:[]}});
 });`);
     await chmod(binary,0o755);
-    const report=await reviewCandidate({...identity,baseline:head,commit:head,binary,workspace:root,sourceWorkspace:root,lease:{id:"run",generation:2,lifecycle:1,title:"Review task",prompt:"Original acceptance requirement",snapshot:{instructions:"Frozen guidance"}},model:"configured-model",signal:new AbortController().signal});
+    const report=await reviewCandidate({...identity,baseline:head,commit:head,binary,workspace:root,sourceWorkspace:root,lease:{id:"run",generation:2,lifecycle:1,title:"Review task",prompt:"Original acceptance requirement",snapshot:{instructions:"Frozen guidance"}},executedChecks:[{command:"npm run check",status:"passed"}],model:"configured-model",signal:new AbortController().signal});
     assert.equal(report.verdict,"approve");
     const seen=JSON.parse(await readFile(observation,"utf8"));
     assert.equal(seen.publishToken,null);assert.ok(seen.methods.includes("thread/start"));assert.ok(!seen.methods.includes("thread/resume"));
@@ -106,6 +117,7 @@ if(m.id!==undefined)send({id:m.id,result:{data:[]}});
     assert.ok(!seen.args.find((v:string)=>v.startsWith("permissions.dev-orchestrator.filesystem"))?.includes('="write"'));
     assert.equal(seen.thread.model,"configured-model");assert.match(seen.turn.input[0].text,/Original acceptance requirement/);
     assert.doesNotMatch(seen.turn.input[0].text,/No actionable defects found/);
+    assert.match(seen.turn.input[0].text,/"command":"npm run check","status":"passed"/);
     await assert.rejects(reviewCandidate({...identity,baseline:head,commit:head,binary,workspace:root,sourceWorkspace:root,lease:{id:"run",generation:2,lifecycle:1,prompt:"tamper-fixture"},signal:new AbortController().signal}),/changed|modified|candidate/i);
   } finally {await rm(root,{recursive:true,force:true});}
 });

@@ -29,7 +29,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     view |> element("button[phx-click='pair']") |> render_click()
 
     pairing_html = render(view)
-    assert pairing_html =~ "npx --yes @juan01-ctrl/dev-orchestrator-connector@0.4.0 pair"
+    assert pairing_html =~ "npx --yes @juan01-ctrl/dev-orchestrator-connector@0.4.1 pair"
     assert pairing_html =~ "aria-label=\"Copy pairing command\""
 
     {:ok, enrollment_code} = DevOrchestrator.Executors.create_enrollment(scope)
@@ -40,7 +40,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
     assert {:ok, _executor} = DevOrchestrator.Executors.authenticate(executor_token)
 
     {:ok, _view, html} = live(conn, "/app/executors")
-    assert html =~ "npx --yes @juan01-ctrl/dev-orchestrator-connector@0.4.0 run"
+    assert html =~ "npx --yes @juan01-ctrl/dev-orchestrator-connector@0.4.1 run"
     assert html =~ "aria-label=\"Copy start command\""
   end
 
@@ -268,7 +268,7 @@ defmodule DevOrchestratorWeb.ProjectLiveTest do
 
     {:ok, _view, html} = live(conn, "/app/executors")
 
-    assert html =~ "@juan01-ctrl/dev-orchestrator-connector@0.4.0 run --config"
+    assert html =~ "@juan01-ctrl/dev-orchestrator-connector@0.4.1 run --config"
     assert html =~ "Copy start command"
     assert html =~ "Pair this computer"
     assert html =~ "Start the connector"

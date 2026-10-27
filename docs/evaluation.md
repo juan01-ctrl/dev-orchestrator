@@ -11,7 +11,7 @@ node evals/run.mjs --trials 3
 ```
 
 This runs the eval harness's own tests, connector typecheck/build and the complete
-platform/connector suites three times. `evals/manifest.json` identifies 81 required
+platform/connector suites three times. `evals/manifest.json` identifies 83 required
 workflow scenarios across intake, authorization, idempotency, validation,
 continuation, publication and recovery. Renamed/missing/skipped/duplicate scenarios,
 any failing native test, malformed evidence, process failure or timeout fail the
@@ -82,7 +82,7 @@ current endpoint health. Missing live evidence keeps the release gate incomplete
 
 ## Before connecting real tools
 
-Independent review requires a fresh task claimed by connector 0.4.0 after the
+Independent review requires a fresh task claimed by connector 0.4.1 after the
 server upgrade. Verify an independent read-only/no-network process and clean
 head-pinned clone, no implementation history or publish token, rejection of
 important findings, and richer human PR context. A legacy snapshot's description

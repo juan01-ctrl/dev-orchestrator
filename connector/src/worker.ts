@@ -424,7 +424,7 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         state.review_attempts=(state.review_attempts??0)+1;await journal.save(state);
         const reviewSignal=AbortSignal.any([controller.signal,AbortSignal.timeout(Math.max(1,Math.min(180_000,state.deadline_at!-Date.now())))]);
         try {
-          state.review=await publisher.reviewSnapshot(status.commit,path=>(dependencies.reviewer??reviewCandidate)({ ...identity,binary:config.codexBinary??"codex",workspace:path,sourceWorkspace:workspace.path,lease:state.lease,assets:state.materialized_assets,
+          state.review=await publisher.reviewSnapshot(status.commit,path=>(dependencies.reviewer??reviewCandidate)({ ...identity,binary:config.codexBinary??"codex",workspace:path,sourceWorkspace:workspace.path,lease:state.lease,executedChecks:state.executed_checks??[],assets:state.materialized_assets,
             model:(snapshot.execution_policy as any)?.model,effort:(snapshot.execution_policy as any)?.effort,signal:reviewSignal }),reviewSignal);
           await journal.save(state);
         } catch(error) {
@@ -455,7 +455,8 @@ export async function execute(config:Config,api:Transport,journal:Journal,state:
         }
         await journal.preserveCompleted(state);
         const finding=state.review?.findings.find(f=>f.severity!=="minor");
-        throw blocked("validation_failed",finding?`Independent review requires changes: ${finding.path}:${finding.line}: ${finding.description}`:"Independent review did not approve this candidate. Review its limitations before retrying.");
+        const reason=[state.review?.summary,...(state.review?.limitations??[])].filter(Boolean).join(" ");
+        throw blocked("validation_failed",finding?`Independent review requires changes: ${finding.path}:${finding.line}: ${finding.description}`:`Independent review blocked: ${reason || "The reviewer could not establish the required evidence."}`);
       }
       if((await publisher.status(controller.signal)).commit!==status.commit)throw blocked("validation_failed","Candidate changed after independent review; publication stopped.");
     }

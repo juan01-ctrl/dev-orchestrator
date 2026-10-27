@@ -1,6 +1,6 @@
 {
   "name": "@juan01-ctrl/dev-orchestrator-connector",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Run a customer-owned local Codex executor for Dev Orchestrator.",
   "type": "module",
   "bin": {
