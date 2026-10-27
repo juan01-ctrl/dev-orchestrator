@@ -125,7 +125,7 @@ private continuation checkpoints while their pauses or review windows are active
 
 ## Independent candidate review (connector 0.4.0)
 
-Release `@juan01-ctrl/dev-orchestrator-connector@0.4.0` with its configured restricted
+Release `@juan01-ctrl/dev-orchestrator-connector@0.4.0` with its configured public
 access. Deploy the server and its Slack decision migration before starting the new
 connector. Then stop the old connector cleanly and start 0.4.0 using the existing
 config and runtime directory; do not pair again or run two processes against the
